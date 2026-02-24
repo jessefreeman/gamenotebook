@@ -67,11 +67,16 @@ jobs:
       - name: Build Tauri bundles
         run: pnpm exec tauri build --config src-tauri/tauri.conf.ci.json
 
+      - name: Collect release package files
+        shell: bash
+        run: |
+          node -e "const fs=require('fs');const path=require('path');const root=path.join('src-tauri','target','release','bundle');const out='release-files';const include=(name)=>name.endsWith('.dmg')||name.endsWith('.app.tar.gz')||name.endsWith('.msi')||name.endsWith('.exe')||name.endsWith('.deb')||name.endsWith('.AppImage')||name.endsWith('.rpm');const walk=(dir,acc)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const full=path.join(dir,entry.name);if(entry.isDirectory()){walk(full,acc);continue;}if(include(entry.name)){acc.push(full);}}};if(!fs.existsSync(root)){throw new Error('Bundle directory not found: '+root);}fs.rmSync(out,{recursive:true,force:true});fs.mkdirSync(out,{recursive:true});const files=[];walk(root,files);if(files.length===0){throw new Error('No release package files found under '+root);}for(const file of files){const dest=path.join(out,path.basename(file));fs.copyFileSync(file,dest);}console.log(files.join('\\n'));"
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: bundles-${{ matrix.platform.name }}
-          path: src-tauri/target/release/bundle/**
+          path: release-files/*
           if-no-files-found: error
 
   release:
@@ -83,12 +88,28 @@ jobs:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: bundles-*
           path: release-artifacts
-          merge-multiple: true
+
+      - name: List release assets
+        run: |
+          ls -R release-artifacts
+
+      - name: Validate assets from each platform
+        shell: bash
+        run: |
+          for platform in macos windows linux; do
+            count=$(find "release-artifacts/bundles-${platform}" -type f | wc -l | tr -d ' ')
+            echo "${platform}_files=${count}"
+            if [ "${count}" -eq 0 ]; then
+              echo "Missing release files from ${platform}"
+              exit 1
+            fi
+          done
 
       - name: Attach artifacts to tag release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
-          files: release-artifacts/**
+          files: release-artifacts/**/*

@@ -251,7 +251,7 @@ export const actions = {
       }
     }
 
-    const snippetsFileName = "dropcode.code-snippets"
+    const snippetsFileName = "gamenotebook.code-snippets"
     const codeSnippetsDir = `Code${path.sep}User${path.sep}snippets`
     const snippetsFilePath = `${codeSnippetsDir}${path.sep}${snippetsFileName}`
 

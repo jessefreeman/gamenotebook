@@ -45,7 +45,7 @@ const buildRoot = path.join(rootDir, "artifacts", "macos")
 const buildsDir = path.join(buildRoot, "builds")
 const outputDir = path.join(buildsDir, buildId)
 const outputAppPath = path.join(outputDir, `${productName}.app`)
-const cargoTargetDir = `/tmp/gamenotepad-target-${timestamp}-${process.pid}`
+const cargoTargetDir = `/tmp/gamenotebook-target-${timestamp}-${process.pid}`
 const bundleDir = path.join(cargoTargetDir, "release", "bundle", "macos")
 
 mkdirSync(buildsDir, { recursive: true })
