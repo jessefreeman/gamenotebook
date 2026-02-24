@@ -11,6 +11,10 @@ import {
 } from "solid-js"
 import { confirm } from "@tauri-apps/api/dialog"
 import { WebviewWindow } from "@tauri-apps/api/window"
+import {
+  BasicScriptEditor,
+  type BasicScriptEditorApi,
+} from "../components/BasicScriptEditor"
 import { Editor } from "../components/Editor"
 import {
   FolderHistoryModal,
@@ -29,11 +33,16 @@ import {
   BASIC_RUNNER_STORAGE_KEY,
   encodeRunnerPayload,
 } from "../basic/runner-payload"
+import {
+  compileExecutableScript,
+  parseEditableScript,
+} from "../basic/script-model"
 
 export const Snippets = () => {
   const goto = useNavigate()
   const [searchParams] = useSearchParams<{ folder: string; id?: string }>()
   const [content, setContent] = createSignal("")
+  const [getExecutableContent, setExecutableContent] = createSignal("")
   const [getOpenLanguageModal, setOpenLanguageModal] = createSignal(false)
   const [getOpenFolderHistoryModal, setOpenFolderHistoryModal] =
     createSignal(false)
@@ -48,6 +57,7 @@ export const Snippets = () => {
     createSignal<string | undefined>()
 
   let editorView: EditorView | undefined
+  let basicEditorApi: BasicScriptEditorApi | undefined
   let searchInputEl: HTMLInputElement | undefined
   const nameInputControl = useFormControl({
     defaultValue: "",
@@ -192,7 +202,10 @@ export const Snippets = () => {
     localStorage.setItem(
       BASIC_RUNNER_STORAGE_KEY,
       encodeRunnerPayload({
-        source: content(),
+        source:
+          currentSnippet.language === "plaintext"
+            ? getExecutableContent() || content()
+            : content(),
         snippetName: currentSnippet.name,
         timestamp: Date.now(),
       })
@@ -222,9 +235,6 @@ export const Snippets = () => {
   }
 
   const jumpToBasicLine = () => {
-    const view = editorView
-    if (!view) return
-
     const userInput = window.prompt("Jump to BASIC line number:", "")
     if (!userInput) return
 
@@ -232,6 +242,19 @@ export const Snippets = () => {
     if (!Number.isInteger(targetLineNumber) || targetLineNumber < 0) {
       return
     }
+
+    if (snippet()?.language === "plaintext") {
+      const jumped = basicEditorApi?.jumpToScriptLine(targetLineNumber)
+      if (!jumped) {
+        window.alert(
+          `BASIC line ${targetLineNumber} not found in this script.`
+        )
+      }
+      return
+    }
+
+    const view = editorView
+    if (!view) return
 
     for (let docLineNumber = 1; docLineNumber <= view.state.doc.lines; docLineNumber += 1) {
       const line = view.state.doc.line(docLineNumber)
@@ -300,6 +323,7 @@ export const Snippets = () => {
 
     const content = await actions.readSnippetContent(searchParams.id)
     setContent(content)
+    setExecutableContent(compileExecutableScript(parseEditableScript(content)))
   }
 
   // load snippet content
@@ -325,6 +349,8 @@ export const Snippets = () => {
   createEffect(
     on([() => searchParams.id, getSearchType], () => {
       setSelectedSnippetIds([])
+      editorView = undefined
+      basicEditorApi = undefined
     })
   )
 
@@ -591,14 +617,28 @@ export const Snippets = () => {
               </div>
             </div>
             <div class="h-mainBody overflow-y-auto">
-              <Editor
-                value={content()}
-                onChange={handleEditorChange}
-                onViewReady={(view) => {
-                  editorView = view
-                }}
-                extensions={languageExtension() ? [languageExtension()!()] : []}
-              />
+              <Show
+                when={snippet()!.language === "plaintext"}
+                fallback={
+                  <Editor
+                    value={content()}
+                    onChange={handleEditorChange}
+                    onViewReady={(view) => {
+                      editorView = view
+                    }}
+                    extensions={languageExtension() ? [languageExtension()!()] : []}
+                  />
+                }
+              >
+                <BasicScriptEditor
+                  value={content()}
+                  onChange={handleEditorChange}
+                  onExecutableChange={setExecutableContent}
+                  onApi={(api) => {
+                    basicEditorApi = api ?? undefined
+                  }}
+                />
+              </Show>
             </div>
           </div>
         </Show>
