@@ -1,4 +1,4 @@
-import { onCleanup, onMount } from "solid-js"
+import { createSignal, onCleanup, onMount, Show } from "solid-js"
 import { BasicRuntime } from "../basic/interpreter"
 import { PixelTextRenderer } from "../basic/renderer"
 import {
@@ -9,14 +9,35 @@ import {
 const fontUrl = new URL("../../large.font.png", import.meta.url).href
 
 export const Runner = () => {
+  const [getWaitingPrompt, setWaitingPrompt] = createSignal<string | null>(null)
+  const [getInputValue, setInputValue] = createSignal("")
+
   let canvasEl: HTMLCanvasElement | undefined
+  let inputEl: HTMLInputElement | undefined
   let renderer: PixelTextRenderer | null = null
   let runtime: BasicRuntime | null = null
+  let pendingInputResolve: ((value: string) => void) | null = null
   const keyQueue: string[] = []
 
   const stopRuntime = () => {
     runtime?.stop()
     runtime = null
+    if (pendingInputResolve) {
+      pendingInputResolve("")
+      pendingInputResolve = null
+    }
+    setWaitingPrompt(null)
+    setInputValue("")
+  }
+
+  const submitInput = (event: SubmitEvent) => {
+    event.preventDefault()
+    if (!pendingInputResolve) return
+
+    pendingInputResolve(getInputValue())
+    pendingInputResolve = null
+    setWaitingPrompt(null)
+    setInputValue("")
   }
 
   const runSource = async (source: string, snippetName: string) => {
@@ -26,7 +47,14 @@ export const Runner = () => {
 
     const localRuntime = new BasicRuntime({
       renderer,
-      requestInput: async (prompt: string) => window.prompt(prompt, "") ?? "",
+      requestInput: (prompt: string) => {
+        setWaitingPrompt(prompt)
+        setInputValue("")
+        return new Promise<string>((resolve) => {
+          pendingInputResolve = resolve
+          globalThis.setTimeout(() => inputEl?.focus(), 0)
+        })
+      },
       consumeKey: () => keyQueue.shift() ?? null,
     })
 
@@ -43,6 +71,12 @@ export const Runner = () => {
       if (runtime === localRuntime) {
         runtime = null
       }
+      if (pendingInputResolve) {
+        pendingInputResolve("")
+        pendingInputResolve = null
+      }
+      setWaitingPrompt(null)
+      setInputValue("")
     }
 
     document.title = snippetName
@@ -82,6 +116,7 @@ export const Runner = () => {
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (getWaitingPrompt()) return
       if (event.key.length === 1) {
         keyQueue.push(event.key)
       } else if (event.key === "Enter") {
@@ -104,13 +139,34 @@ export const Runner = () => {
   })
 
   return (
-    <div class="h-screen w-screen bg-black overflow-hidden flex items-center justify-center">
+    <div class="h-screen w-screen bg-black overflow-hidden flex items-center justify-center relative">
       <canvas
         ref={canvasEl}
         width={256}
         height={240}
         style="width:min(100vw, calc(100vh * 256 / 240));height:min(100vh, calc(100vw * 240 / 256));image-rendering:pixelated;"
       />
+
+      <Show when={getWaitingPrompt()}>
+        <form
+          onSubmit={submitInput}
+          class="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/90 border border-white/20 rounded px-3 py-2 flex items-center gap-2 text-xs text-white w-[min(92vw,520px)]"
+        >
+          <label class="shrink-0 truncate max-w-[45%]">{getWaitingPrompt()}</label>
+          <input
+            ref={inputEl}
+            value={getInputValue()}
+            onInput={(event) => setInputValue(event.currentTarget.value)}
+            class="flex-1 bg-black border border-white/30 rounded px-2 py-1 outline-none"
+          />
+          <button
+            type="submit"
+            class="border border-white/40 rounded px-2 py-1 uppercase tracking-wide"
+          >
+            Enter
+          </button>
+        </form>
+      </Show>
     </div>
   )
 }
