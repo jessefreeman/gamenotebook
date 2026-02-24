@@ -1,0 +1,76 @@
+:root {
+  --app-bg: #fff;
+  --app-fg: #000;
+  --border-color: theme("colors.zinc.200");
+}
+
+.dark {
+  color-scheme: dark;
+  --app-bg: theme("colors.zinc.800");
+  --app-fg: theme("colors.zinc.300");
+  --border-color: theme("colors.zinc.700");
+}
+
+*,
+*:before,
+*:after {
+  border-color: var(--border-color);
+}
+
+body {
+  @apply overflow-x-hidden;
+  color: var(--app-fg);
+  background-color: var(--app-bg);
+}
+
+input:focus {
+  outline: none;
+}
+
+.shadow-border-b {
+  box-shadow: 0 1px var(--border-color);
+}
+
+.cm-editor {
+  @apply h-full;
+}
+
+.cm-scroller {
+  @apply font-mono !important;
+}
+
+.cursor {
+  @apply cursor-default;
+}
+
+.input {
+  @apply border bg-transparent rounded-lg px-2 h-8 inline-flex items-center focus:ring ring-blue-500 focus:border-blue-500;
+}
+
+.modal {
+  @apply z-10 text-sm overflow-hidden bg-white dark:bg-zinc-800 fixed top-0 left-1/2 w-[500px] transform -translate-x-1/2;
+  box-shadow: 0 0 8px #969696;
+}
+
+.modal-content {
+  @apply max-h-[500px] overflow-y-auto;
+}
+
+.custom-scrollbar::-webkit-scrollbar,
+.cm-scroller::-webkit-scrollbar {
+  width: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track,
+.cm-scroller::-webkit-scrollbar-track {
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb,
+.cm-scroller::-webkit-scrollbar-thumb {
+  @apply opacity-0 bg-zinc-300 dark:bg-zinc-700 hover:bg-zinc-400 dark:hover:bg-zinc-700/75;
+}
+
+.scrollbar-group.custom-scrollbar:hover::-webkit-scrollbar-thumb,
+.cm-editor:hover .cm-scroller::-webkit-scrollbar-thumb {
+  @apply opacity-100;
+}
