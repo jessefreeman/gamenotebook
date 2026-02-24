@@ -1,4 +1,5 @@
 import { Link, useNavigate, useSearchParams } from "@solidjs/router"
+import type { EditorView } from "codemirror"
 import {
   createEffect,
   createMemo,
@@ -46,6 +47,7 @@ export const Snippets = () => {
   const [getOpenVSCodeSnippetSettingsModal, setOpenVSCodeSnippetSettingsModal] =
     createSignal<string | undefined>()
 
+  let editorView: EditorView | undefined
   let searchInputEl: HTMLInputElement | undefined
   const nameInputControl = useFormControl({
     defaultValue: "",
@@ -217,6 +219,35 @@ export const Snippets = () => {
     runnerWindow.once("tauri://error", (event) => {
       console.error("Failed to create runner window", event)
     })
+  }
+
+  const jumpToBasicLine = () => {
+    const view = editorView
+    if (!view) return
+
+    const userInput = window.prompt("Jump to BASIC line number:", "")
+    if (!userInput) return
+
+    const targetLineNumber = Number.parseInt(userInput.trim(), 10)
+    if (!Number.isInteger(targetLineNumber) || targetLineNumber < 0) {
+      return
+    }
+
+    for (let docLineNumber = 1; docLineNumber <= view.state.doc.lines; docLineNumber += 1) {
+      const line = view.state.doc.line(docLineNumber)
+      const match = /^\s*(\d+)\b/.exec(line.text)
+      if (!match) continue
+      if (Number.parseInt(match[1], 10) !== targetLineNumber) continue
+
+      view.dispatch({
+        selection: { anchor: line.from },
+        scrollIntoView: true,
+      })
+      view.focus()
+      return
+    }
+
+    window.alert(`BASIC line ${targetLineNumber} not found in this script.`)
   }
 
   createEffect(() => {
@@ -509,6 +540,13 @@ export const Snippets = () => {
                 />
                 <Button
                   type="button"
+                  onClick={jumpToBasicLine}
+                  tooltip={{ content: "Jump to BASIC line number" }}
+                >
+                  Goto
+                </Button>
+                <Button
+                  type="button"
                   icon="i-majesticons:curly-braces"
                   onClick={() => setOpenLanguageModal(true)}
                   tooltip={{ content: "Select language mode" }}
@@ -556,6 +594,9 @@ export const Snippets = () => {
               <Editor
                 value={content()}
                 onChange={handleEditorChange}
+                onViewReady={(view) => {
+                  editorView = view
+                }}
                 extensions={languageExtension() ? [languageExtension()!()] : []}
               />
             </div>
