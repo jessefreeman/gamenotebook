@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - os: macos-latest
+          - os: macos-13
             name: macos
           - os: windows-latest
             name: windows
@@ -70,9 +70,9 @@ jobs:
       - name: Collect release package files
         shell: bash
         run: |
-          node -e "const fs=require('fs');const path=require('path');const root=path.join('src-tauri','target','release','bundle');const out='release-files';const include=(name)=>name.endsWith('.dmg')||name.endsWith('.app.tar.gz')||name.endsWith('.msi')||name.endsWith('.exe')||name.endsWith('.deb')||name.endsWith('.AppImage')||name.endsWith('.rpm');const walk=(dir,acc)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const full=path.join(dir,entry.name);if(entry.isDirectory()){walk(full,acc);continue;}if(include(entry.name)){acc.push(full);}}};if(!fs.existsSync(root)){throw new Error('Bundle directory not found: '+root);}fs.rmSync(out,{recursive:true,force:true});fs.mkdirSync(out,{recursive:true});const files=[];walk(root,files);if(files.length===0){throw new Error('No release package files found under '+root);}for(const file of files){const dest=path.join(out,path.basename(file));fs.copyFileSync(file,dest);}console.log(files.join('\\n'));"
+          node -e "const fs=require('fs');const path=require('path');const root=path.join('src-tauri','target','release','bundle');const out='release-files';const include=(name)=>name.endsWith('.dmg')||name.endsWith('.app.tar.gz')||name.endsWith('.msi')||name.endsWith('.deb')||name.endsWith('.AppImage')||name.endsWith('.rpm');const walk=(dir,acc)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const full=path.join(dir,entry.name);if(entry.isDirectory()){walk(full,acc);continue;}if(include(entry.name)){acc.push(full);}}};if(!fs.existsSync(root)){throw new Error('Bundle directory not found: '+root);}fs.rmSync(out,{recursive:true,force:true});fs.mkdirSync(out,{recursive:true});const files=[];walk(root,files);if(files.length===0){throw new Error('No release package files found under '+root);}for(const file of files){const dest=path.join(out,path.basename(file));fs.copyFileSync(file,dest);}console.log(files.join('\\n'));"
 
-      - name: Create Windows portable zip
+      - name: Add Windows standalone exe
         if: matrix.platform.name == 'windows'
         shell: pwsh
         run: |
@@ -94,23 +94,8 @@ jobs:
             throw "Could not find built Windows executable in src-tauri/target/release"
           }
 
-          $portableDir = Join-Path $releaseDir "GameNotebook-portable"
-          if (Test-Path $portableDir) {
-            Remove-Item -Recurse -Force $portableDir
-          }
-          New-Item -Path $portableDir -ItemType Directory -Force | Out-Null
-          Copy-Item $exePath (Join-Path $portableDir "GameNotebook.exe")
-
-          Get-ChildItem "src-tauri/target/release" -Filter "*.dll" | ForEach-Object {
-            Copy-Item $_.FullName $portableDir
-          }
-
-          $zipPath = Join-Path $releaseDir ("GameNotebook_${{ github.ref_name }}_windows_portable.zip")
-          if (Test-Path $zipPath) {
-            Remove-Item -Force $zipPath
-          }
-          Compress-Archive -Path (Join-Path $portableDir "*") -DestinationPath $zipPath -Force
-          Remove-Item -Recurse -Force $portableDir
+          $standaloneExe = Join-Path $releaseDir ("GameNotebook_${{ github.ref_name }}_windows_standalone.exe")
+          Copy-Item $exePath $standaloneExe -Force
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -119,43 +104,9 @@ jobs:
           path: release-files/*
           if-no-files-found: error
 
-  release:
-    name: Publish GitHub release
-    runs-on: ubuntu-latest
-    needs: build
-
-    steps:
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: bundles-*
-          path: release-artifacts
-
-      - name: List release assets
-        run: |
-          ls -R release-artifacts
-
-      - name: Validate assets from each platform
-        shell: bash
-        run: |
-          for platform in macos windows linux; do
-            count=$(find "release-artifacts/bundles-${platform}" -type f | wc -l | tr -d ' ')
-            echo "${platform}_files=${count}"
-            if [ "${count}" -eq 0 ]; then
-              echo "Missing release files from ${platform}"
-              exit 1
-            fi
-          done
-
-          portable_count=$(find "release-artifacts/bundles-windows" -type f -name "*portable.zip" | wc -l | tr -d ' ')
-          if [ "${portable_count}" -eq 0 ]; then
-            echo "Missing Windows portable zip asset"
-            exit 1
-          fi
-
-      - name: Attach artifacts to tag release
+      - name: Attach platform assets to tag release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
-          files: release-artifacts/**/*
+          files: release-files/*
