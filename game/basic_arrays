@@ -1,9 +1,0 @@
-10 CLS ' @id:FvlAdP07On
-20 DIM N(8) ' @id:XDZGLh3YKL
-30 FOR I=0 TO 8 ' @id:VLaltY0Xb4
-40 N(I)=I*I ' @id:4hQ4zMWar-
-50 NEXT I ' @id:rZB7isfUql
-60 FOR I=0 TO 8 ' @id:-tJtSJPaZ5
-70 PRINT "N(";I;")=";N(I) ' @id:ah_GtLNOSX
-80 NEXT I ' @id:wbyJgLfUlg
-90 END ' @id:yFNkX_yMD5

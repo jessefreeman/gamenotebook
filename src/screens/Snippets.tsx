@@ -229,25 +229,21 @@ export const Snippets = () => {
     if (!userInput) return
 
     const targetLineNumber = Number.parseInt(userInput.trim(), 10)
-    if (!Number.isInteger(targetLineNumber) || targetLineNumber < 0) {
+    if (!Number.isInteger(targetLineNumber) || targetLineNumber <= 0) {
       return
     }
 
-    for (let docLineNumber = 1; docLineNumber <= view.state.doc.lines; docLineNumber += 1) {
-      const line = view.state.doc.line(docLineNumber)
-      const match = /^\s*(\d+)\b/.exec(line.text)
-      if (!match) continue
-      if (Number.parseInt(match[1], 10) !== targetLineNumber) continue
-
-      view.dispatch({
-        selection: { anchor: line.from },
-        scrollIntoView: true,
-      })
-      view.focus()
+    if (targetLineNumber > view.state.doc.lines) {
+      window.alert(`BASIC line ${targetLineNumber} not found in this script.`)
       return
     }
 
-    window.alert(`BASIC line ${targetLineNumber} not found in this script.`)
+    const line = view.state.doc.line(targetLineNumber)
+    view.dispatch({
+      selection: { anchor: line.from },
+      scrollIntoView: true,
+    })
+    view.focus()
   }
 
   createEffect(() => {

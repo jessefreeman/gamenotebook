@@ -1,6 +1,7 @@
-# GameNotepad
+# GameNotebook
 
-GameNotepad is a local-first code snippet/notepad app built with Tauri and Solid.js.
+GameNotebook is a local-first code snippet/notepad app built with Tauri and Solid.js.
+> Note: GameNotebook is derived from the original Dropcode project.
 
 ## BASIC Lab MVP
 
@@ -14,6 +15,8 @@ The app now includes BASIC runtime support in the existing two-pane snippets lay
 ### Current BASIC Commands
 
 `LET`, assignment (`A=1`), `PRINT`, `INPUT`, `IF ... THEN ... ELSE`, `GOTO`, `GOSUB`, `RETURN`, `FOR ... NEXT`, `DIM`, `CLS`, `COLOR`, `LOCATE`, `PSET`, `LINE`, `RECT`, `END`, `STOP`.
+
+`GOTO`/`GOSUB`/numeric `THEN` targets use the editor's visible 1-based line numbers.
 
 ### Font Mapping Contract
 
@@ -30,7 +33,7 @@ The app now includes BASIC runtime support in the existing two-pane snippets lay
 3. Runner window title matches the snippet/file name.
 4. `INPUT` in BASIC uses native prompt dialogs (no runner-side form UI).
 
-## Local Development (GameNotepad)
+## Local Development (GameNotebook)
 
 ### Prerequisites
 
@@ -80,7 +83,7 @@ pnpm build:mac:app
 
 Output layout:
 
-1. `artifacts/macos/builds/<build-id>/GameNotepad.app`
+1. `artifacts/macos/builds/<build-id>/GameNotebook.app`
 2. `artifacts/macos/LATEST_BUILD_ID.txt`
 3. `artifacts/macos/LATEST_APP_PATH.txt`
 
@@ -96,4 +99,4 @@ This workspace path contains spaces (`/Volumes/My Shared Files/...`). The build 
 
 ## License
 
-GameNotepad is licensed under the MIT license. See [LICENSE](LICENSE) for details.
+GameNotebook is licensed under the MIT license. See [LICENSE](LICENSE) for details.

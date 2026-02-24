@@ -3,21 +3,21 @@ import { Editor } from "../components/Editor"
 import { BasicRuntime } from "../basic/interpreter"
 import { PixelTextRenderer } from "../basic/renderer"
 
-const STARTER_PROGRAM = `10 CLS
-20 COLOR 12,0
-30 LOCATE 2,2
-40 PRINT "GameNotepad BASIC MVP"
-50 COLOR 7,0
-60 PRINT "WHAT IS YOUR NAME";
-70 INPUT N$
-80 CLS
-90 LOCATE 2,2
-100 PRINT "HELLO, ";N$
-110 PRINT "PRESS A KEY:"
-120 K$ = INKEY$
-130 IF K$ = "" THEN 120
-140 PRINT "YOU PRESSED: ";K$
-150 GOTO 110
+const STARTER_PROGRAM = `CLS
+COLOR 12,0
+LOCATE 2,2
+PRINT "GameNotebook BASIC MVP"
+COLOR 7,0
+PRINT "WHAT IS YOUR NAME";
+INPUT N$
+CLS
+LOCATE 2,2
+PRINT "HELLO, ";N$
+PRINT "PRESS A KEY:"
+K$ = INKEY$
+IF K$ = "" THEN 12
+PRINT "YOU PRESSED: ";K$
+GOTO 11
 `
 
 const fontUrl = new URL("../../large.font.png", import.meta.url).href
@@ -116,7 +116,7 @@ export const BasicLab = () => {
     try {
       await renderer.init(fontUrl)
       renderer.setColor(11, 0)
-      renderer.printLine("GameNotepad BASIC ready.")
+      renderer.printLine("GameNotebook BASIC ready.")
       renderer.setColor(7, 0)
       renderer.printLine("Press Run to execute.")
       setRuntimeReady(true)
@@ -149,7 +149,7 @@ export const BasicLab = () => {
   return (
     <div class="h-screen flex flex-col">
       <div class="h-10 border-b px-3 flex items-center justify-between text-sm">
-        <div class="font-medium">GameNotepad BASIC Lab</div>
+        <div class="font-medium">GameNotebook BASIC Lab</div>
         <div class="flex items-center gap-2">
           <button
             type="button"

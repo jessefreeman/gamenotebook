@@ -4,7 +4,8 @@ import { stringToAsciiCode } from "./ascii"
 type BasicValue = number | string
 
 type ProgramLine = {
-  lineNumber: number | null
+  lineNumber: number
+  legacyLineNumber: number | null
   source: string
   statements: string[]
 }
@@ -624,21 +625,23 @@ export class BasicRuntime {
     const lines = source.replace(/\r\n/g, "\n").split("\n")
     const parsed: ProgramLine[] = []
 
-    for (const rawLine of lines) {
+    for (let index = 0; index < lines.length; index += 1) {
+      const rawLine = lines[index] ?? ""
       const trimmed = rawLine.trim()
-      if (!trimmed) continue
+      const lineNumber = index + 1
 
       const lineMatch = /^(\d+)\s*(.*)$/.exec(trimmed)
-      let lineNumber: number | null = null
+      let legacyLineNumber: number | null = null
       let body = trimmed
       if (lineMatch) {
-        lineNumber = Number.parseInt(lineMatch[1], 10)
+        legacyLineNumber = Number.parseInt(lineMatch[1], 10)
         body = lineMatch[2].trim()
       }
 
       const normalizedBody = body === "" ? "REM" : body
       parsed.push({
         lineNumber,
+        legacyLineNumber,
         source: normalizedBody,
         statements: splitTopLevel(normalizedBody, ":"),
       })
@@ -649,11 +652,18 @@ export class BasicRuntime {
 
   private buildLineNumberIndex(program: ProgramLine[]): void {
     program.forEach((line, index) => {
-      if (line.lineNumber === null) return
-      if (this.lineNumberIndex.has(line.lineNumber)) {
-        throw new Error(`Duplicate line number ${line.lineNumber}`)
-      }
       this.lineNumberIndex.set(line.lineNumber, index)
+    })
+
+    program.forEach((line, index) => {
+      if (line.legacyLineNumber === null || line.legacyLineNumber === line.lineNumber) {
+        return
+      }
+      const existing = this.lineNumberIndex.get(line.legacyLineNumber)
+      if (existing !== undefined && existing !== index) {
+        throw new Error(`Duplicate line number ${line.legacyLineNumber}`)
+      }
+      this.lineNumberIndex.set(line.legacyLineNumber, index)
     })
   }
 
