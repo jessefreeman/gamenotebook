@@ -60,21 +60,55 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate mac signing secrets
+        if: matrix.platform.name == 'macos'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          for key in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!key}" ]; then
+              missing+=("$key")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "Missing required macOS signing/notarization secrets: ${missing[*]}"
+            exit 1
+          fi
+
       - name: Create CI Tauri config
         run: |
           node -e "const fs=require('fs');const path='src-tauri/tauri.conf.json';const cfg=JSON.parse(fs.readFileSync(path,'utf8'));if(cfg?.tauri?.updater){cfg.tauri.updater.active=false;}fs.writeFileSync('src-tauri/tauri.conf.ci.json', JSON.stringify(cfg, null, 2));"
 
       - name: Build Tauri bundles
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm exec tauri build --config src-tauri/tauri.conf.ci.json
 
       - name: Collect release package files
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_OS: ${{ matrix.platform.name }}
         run: |
-          node -e "const fs=require('fs');const path=require('path');const root=path.join('src-tauri','target','release','bundle');const out='release-files';const include=(name)=>name.endsWith('.dmg')||name.endsWith('.app.tar.gz')||name.endsWith('.msi')||name.endsWith('.deb')||name.endsWith('.AppImage')||name.endsWith('.rpm');const walk=(dir,acc)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const full=path.join(dir,entry.name);if(entry.isDirectory()){walk(full,acc);continue;}if(include(entry.name)){acc.push(full);}}};if(!fs.existsSync(root)){throw new Error('Bundle directory not found: '+root);}fs.rmSync(out,{recursive:true,force:true});fs.mkdirSync(out,{recursive:true});const files=[];walk(root,files);if(files.length===0){throw new Error('No release package files found under '+root);}for(const file of files){const dest=path.join(out,path.basename(file));fs.copyFileSync(file,dest);}console.log(files.join('\\n'));"
+          node -e "const fs=require('fs');const path=require('path');const root=path.join('src-tauri','target','release','bundle');const out='release-files';const version=process.env.RELEASE_VERSION;const os=process.env.RELEASE_OS;const include=(name)=>name.endsWith('.dmg')||name.endsWith('.app.tar.gz')||name.endsWith('.msi')||name.endsWith('.deb')||name.endsWith('.AppImage')||name.endsWith('.rpm');const classify=(name)=>{if(name.endsWith('.app.tar.gz')) return {type:'app',ext:'.app.tar.gz'}; if(name.endsWith('.dmg')) return {type:'dmg',ext:'.dmg'}; if(name.endsWith('.msi')) return {type:'msi',ext:'.msi'}; if(name.endsWith('.deb')) return {type:'deb',ext:'.deb'}; if(name.endsWith('.AppImage')) return {type:'appimage',ext:'.AppImage'}; if(name.endsWith('.rpm')) return {type:'rpm',ext:'.rpm'}; return null;}; const walk=(dir,acc)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const full=path.join(dir,entry.name);if(entry.isDirectory()){walk(full,acc);continue;}if(include(entry.name)){acc.push(full);}}}; if(!fs.existsSync(root)){throw new Error('Bundle directory not found: '+root);} fs.rmSync(out,{recursive:true,force:true}); fs.mkdirSync(out,{recursive:true}); const files=[]; walk(root,files); if(files.length===0){throw new Error('No release package files found under '+root);} for(const file of files){const info=classify(path.basename(file)); if(!info) continue; const dest=path.join(out,`GameNotebook_${version}_${os}_${info.type}${info.ext}`); fs.copyFileSync(file,dest);} console.log(fs.readdirSync(out).join('\\n'));"
 
       - name: Add Windows standalone exe
         if: matrix.platform.name == 'windows'
         shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
         run: |
           $releaseDir = "release-files"
           New-Item -Path $releaseDir -ItemType Directory -Force | Out-Null
@@ -94,7 +128,7 @@ jobs:
             throw "Could not find built Windows executable in src-tauri/target/release"
           }
 
-          $standaloneExe = Join-Path $releaseDir ("GameNotebook_${{ github.ref_name }}_windows_standalone.exe")
+          $standaloneExe = Join-Path $releaseDir ("GameNotebook_${env:RELEASE_VERSION}_windows_standalone.exe")
           Copy-Item $exePath $standaloneExe -Force
 
       - name: Upload build artifacts
@@ -110,3 +144,4 @@ jobs:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
           files: release-files/*
+          overwrite_files: true
