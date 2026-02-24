@@ -67,7 +67,7 @@ jobs:
       - name: Build Tauri bundles
         run: pnpm exec tauri build --config src-tauri/tauri.conf.ci.json
 
-      - name: Prepare unsigned mac app archive
+      - name: Prepare unsigned mac dmg
         if: matrix.platform.name == 'macos'
         shell: bash
         env:
@@ -84,8 +84,11 @@ jobs:
           codesign --force --deep --sign - "$app_path"
 
           mkdir -p release-files
-          archive="release-files/GameNotebook_${RELEASE_VERSION}_macos_app.tar.gz"
-          tar -C "$bundle_dir" -czf "$archive" "$(basename "$app_path")"
+          stage_dir=$(mktemp -d)
+          cp -R "$app_path" "$stage_dir/"
+          archive="release-files/GameNotebook_${RELEASE_VERSION}_macos_dmg.dmg"
+          hdiutil create -volname "GameNotebook" -srcfolder "$stage_dir" -ov -format UDZO "$archive"
+          rm -rf "$stage_dir"
 
       - name: Collect release package files
         if: matrix.platform.name != 'macos'
