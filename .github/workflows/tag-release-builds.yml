@@ -65,7 +65,7 @@ jobs:
           node -e "const fs=require('fs');const path='src-tauri/tauri.conf.json';const cfg=JSON.parse(fs.readFileSync(path,'utf8'));if(cfg?.tauri?.updater){cfg.tauri.updater.active=false;}fs.writeFileSync('src-tauri/tauri.conf.ci.json', JSON.stringify(cfg, null, 2));"
 
       - name: Build Tauri bundles
-        run: pnpm tauri build -- --config src-tauri/tauri.conf.ci.json
+        run: pnpm exec tauri build --config src-tauri/tauri.conf.ci.json
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
