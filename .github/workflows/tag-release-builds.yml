@@ -33,17 +33,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 7.33.7
           run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -53,40 +54,89 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev librsvg2-dev patchelf
-          sudo apt-get install -y libwebkit2gtk-4.1-dev || sudo apt-get install -y libwebkit2gtk-4.0-dev
+          sudo apt-get install -y libwebkit2gtk-4.0-dev || sudo apt-get install -y libwebkit2gtk-4.1-dev
           sudo apt-get install -y libayatana-appindicator3-dev || sudo apt-get install -y libappindicator3-dev
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Create CI Tauri config
+        run: |
+          node -e "const fs=require('fs');const path='src-tauri/tauri.conf.json';const cfg=JSON.parse(fs.readFileSync(path,'utf8'));if(cfg?.tauri?.updater){cfg.tauri.updater.active=false;}fs.writeFileSync('src-tauri/tauri.conf.ci.json', JSON.stringify(cfg, null, 2));"
+
       - name: Build Tauri bundles
+        run: pnpm exec tauri build --config src-tauri/tauri.conf.ci.json
+
+      - name: Prepare unsigned mac dmg
+        if: matrix.platform.name == 'macos'
+        shell: bash
         env:
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: pnpm tauri build
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          bundle_dir="src-tauri/target/release/bundle/macos"
+          app_path=$(find "$bundle_dir" -maxdepth 1 -type d -name "*.app" | head -n 1)
+          if [ -z "$app_path" ]; then
+            echo "No .app bundle found in $bundle_dir"
+            exit 1
+          fi
+
+          # Ad-hoc sign to keep bundle signature valid without Apple certs.
+          codesign --force --deep --sign - "$app_path"
+
+          mkdir -p release-files
+          stage_dir=$(mktemp -d)
+          cp -R "$app_path" "$stage_dir/"
+          archive="release-files/GameNotebook_${RELEASE_VERSION}_macos_dmg.dmg"
+          hdiutil create -volname "GameNotebook" -srcfolder "$stage_dir" -ov -format UDZO "$archive"
+          rm -rf "$stage_dir"
+
+      - name: Collect release package files
+        if: matrix.platform.name != 'macos'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_OS: ${{ matrix.platform.name }}
+        run: |
+          node -e "const fs=require('fs');const path=require('path');const root=path.join('src-tauri','target','release','bundle');const out='release-files';const version=process.env.RELEASE_VERSION;const os=process.env.RELEASE_OS;const include=(name)=>name.endsWith('.msi')||name.endsWith('.deb')||name.endsWith('.AppImage')||name.endsWith('.rpm');const classify=(name)=>{if(name.endsWith('.msi')) return {type:'msi',ext:'.msi'}; if(name.endsWith('.deb')) return {type:'deb',ext:'.deb'}; if(name.endsWith('.AppImage')) return {type:'appimage',ext:'.AppImage'}; if(name.endsWith('.rpm')) return {type:'rpm',ext:'.rpm'}; return null;}; const walk=(dir,acc)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const full=path.join(dir,entry.name);if(entry.isDirectory()){walk(full,acc);continue;}if(include(entry.name)){acc.push(full);}}}; if(!fs.existsSync(root)){throw new Error('Bundle directory not found: '+root);} fs.rmSync(out,{recursive:true,force:true}); fs.mkdirSync(out,{recursive:true}); const files=[]; walk(root,files); if(files.length===0){throw new Error('No release package files found under '+root);} for(const file of files){const info=classify(path.basename(file)); if(!info) continue; const dest=path.join(out,`GameNotebook_${version}_${os}_${info.type}${info.ext}`); fs.copyFileSync(file,dest);} console.log(fs.readdirSync(out).join('\\n'));"
+
+      - name: Add Windows standalone exe
+        if: matrix.platform.name == 'windows'
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          $releaseDir = "release-files"
+          New-Item -Path $releaseDir -ItemType Directory -Force | Out-Null
+
+          $exeCandidates = @(
+            "src-tauri/target/release/gamenotebook.exe",
+            "src-tauri/target/release/GameNotebook.exe"
+          )
+          $exePath = $null
+          foreach ($candidate in $exeCandidates) {
+            if (Test-Path $candidate) {
+              $exePath = $candidate
+              break
+            }
+          }
+          if (-not $exePath) {
+            throw "Could not find built Windows executable in src-tauri/target/release"
+          }
+
+          $standaloneExe = Join-Path $releaseDir ("GameNotebook_${env:RELEASE_VERSION}_windows_standalone.exe")
+          Copy-Item $exePath $standaloneExe -Force
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: bundles-${{ matrix.platform.name }}
-          path: src-tauri/target/release/bundle/**
+          path: release-files/*
           if-no-files-found: error
 
-  release:
-    name: Publish GitHub release
-    runs-on: ubuntu-latest
-    needs: build
-
-    steps:
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
-          merge-multiple: true
-
-      - name: Attach artifacts to tag release
+      - name: Attach platform assets to tag release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
-          files: release-artifacts/**
+          files: release-files/*
+          overwrite_files: true
