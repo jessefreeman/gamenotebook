@@ -33,17 +33,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 7.33.7
           run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -53,17 +54,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev librsvg2-dev patchelf
-          sudo apt-get install -y libwebkit2gtk-4.1-dev || sudo apt-get install -y libwebkit2gtk-4.0-dev
+          sudo apt-get install -y libwebkit2gtk-4.0-dev || sudo apt-get install -y libwebkit2gtk-4.1-dev
           sudo apt-get install -y libayatana-appindicator3-dev || sudo apt-get install -y libappindicator3-dev
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Create CI Tauri config
+        run: |
+          node -e "const fs=require('fs');const path='src-tauri/tauri.conf.json';const cfg=JSON.parse(fs.readFileSync(path,'utf8'));if(cfg?.tauri?.updater){cfg.tauri.updater.active=false;}fs.writeFileSync('src-tauri/tauri.conf.ci.json', JSON.stringify(cfg, null, 2));"
+
       - name: Build Tauri bundles
-        env:
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: pnpm tauri build
+        run: pnpm tauri build -- --config src-tauri/tauri.conf.ci.json
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
