@@ -11,17 +11,6 @@ The app now includes BASIC runtime support in the existing two-pane snippets lay
 3. A separate runner window opens and executes the current snippet source.
 4. The runner window is canvas-only (no UI chrome) and scales the 256x240 output to fit the window.
 
-### Structured BASIC Line Editor
-
-For plaintext BASIC snippets, the editor now uses structured line objects:
-
-1. Left-side script line numbers auto-increment by `10`.
-2. Adding lines shifts numbering automatically.
-3. You can edit line numbers directly to reorder lines.
-4. Lines can be drag-reordered with the drag handle.
-5. Dragging a line badge into code inserts a linked line-reference token (`{{L:<id>}}`) that resolves to the target line number at runtime.
-6. If a referenced line is deleted, linked tokens targeting that line are removed.
-
 ### Current BASIC Commands
 
 `LET`, assignment (`A=1`), `PRINT`, `INPUT`, `IF ... THEN ... ELSE`, `GOTO`, `GOSUB`, `RETURN`, `FOR ... NEXT`, `DIM`, `CLS`, `COLOR`, `LOCATE`, `PSET`, `LINE`, `RECT`, `END`, `STOP`.
@@ -40,15 +29,6 @@ For plaintext BASIC snippets, the editor now uses structured line objects:
 2. Pressing `Play` updates the active runner with the latest snippet source.
 3. Runner window title matches the snippet/file name.
 4. `INPUT` in BASIC uses native prompt dialogs (no runner-side form UI).
-
-### Test Script Folders
-
-Starter validation scripts are available in both folders:
-
-1. `games/`
-2. `game/`
-
-Each includes a `snippets.json` plus sample BASIC files you can run with `Play`.
 
 ## Local Development (GameNotepad)
 
