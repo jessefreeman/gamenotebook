@@ -21,6 +21,7 @@ export const Editor = (props: {
   onChange: (newValue: string) => void
   extensions?: Extension[]
   onViewReady?: (view: EditorView) => void
+  onTemplateTrigger?: () => void
 }) => {
   let el: HTMLDivElement | undefined
   const [getView, setView] = createSignal<EditorView | undefined>()
@@ -64,11 +65,36 @@ export const Editor = (props: {
         event.preventDefault()
       }
 
+      const handleTemplateTriggerKeyDown = (event: KeyboardEvent) => {
+        if (!props.onTemplateTrigger) return
+        if (event.defaultPrevented) return
+        if (event.key !== "/") return
+        if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) {
+          return
+        }
+
+        const selection = view.state.selection.main
+        if (!selection.empty) return
+
+        const cursor = selection.from
+        if (cursor > 0) {
+          const prevChar = view.state.sliceDoc(cursor - 1, cursor)
+          if (!/\s/.test(prevChar)) {
+            return
+          }
+        }
+
+        event.preventDefault()
+        props.onTemplateTrigger()
+      }
+
       view.dom.addEventListener("mousedown", handleGutterMouseDown)
+      view.dom.addEventListener("keydown", handleTemplateTriggerKeyDown)
       props.onViewReady?.(view)
 
       onCleanup(() => {
         view.dom.removeEventListener("mousedown", handleGutterMouseDown)
+        view.dom.removeEventListener("keydown", handleTemplateTriggerKeyDown)
       })
 
       return view

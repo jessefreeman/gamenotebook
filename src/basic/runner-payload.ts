@@ -1,4 +1,4 @@
-export const BASIC_RUNNER_STORAGE_KEY = "gamenotepad.basic.runner.payload"
+export const BASIC_RUNNER_STORAGE_KEY = "gamenotebook.basic.runner.payload"
 
 export type BasicRunnerPayload = {
   source: string

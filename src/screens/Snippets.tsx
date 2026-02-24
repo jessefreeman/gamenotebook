@@ -1,5 +1,6 @@
 import { Link, useNavigate, useSearchParams } from "@solidjs/router"
 import type { EditorView } from "codemirror"
+import { snippet as createCodeMirrorSnippet } from "@codemirror/autocomplete"
 import {
   createEffect,
   createMemo,
@@ -13,11 +14,17 @@ import { confirm } from "@tauri-apps/api/dialog"
 import { WebviewWindow } from "@tauri-apps/api/window"
 import { Editor } from "../components/Editor"
 import {
+  BasicBlocklyEditor,
+  type BasicBlocklyPendingJump,
+  type BasicBlocklyPendingInsert,
+} from "../components/BasicBlocklyEditor"
+import {
+  BasicCommandModal,
   FolderHistoryModal,
-  LanguageModal,
+  LineJumpModal,
   VSCodeSnippetSettingsModal,
 } from "../components/Modal"
-import { getLanguageName, languages } from "../lib/languages"
+import { languages } from "../lib/languages"
 import { debounce } from "../lib/utils"
 import { actions, state } from "../store"
 import { Button } from "../components/Button"
@@ -34,21 +41,33 @@ export const Snippets = () => {
   const goto = useNavigate()
   const [searchParams] = useSearchParams<{ folder: string; id?: string }>()
   const [content, setContent] = createSignal("")
-  const [getOpenLanguageModal, setOpenLanguageModal] = createSignal(false)
+  const [getOpenBasicCommandModal, setOpenBasicCommandModal] =
+    createSignal(false)
+  const [getOpenLineJumpModal, setOpenLineJumpModal] = createSignal(false)
   const [getOpenFolderHistoryModal, setOpenFolderHistoryModal] =
     createSignal(false)
   const [getSearchType, setSearchType] = createSignal<
     null | "non-trash" | "trash"
   >(null)
   const [getSearchKeyword, setSearchKeyword] = createSignal<string>("")
+  const [getIsContentDirty, setIsContentDirty] = createSignal(false)
+  const [getIsSavingContent, setIsSavingContent] = createSignal(false)
   const [getSelectedSnippetIds, setSelectedSnippetIds] = createSignal<string[]>(
     []
   )
   const [getOpenVSCodeSnippetSettingsModal, setOpenVSCodeSnippetSettingsModal] =
     createSignal<string | undefined>()
+  const [getIsVisualMode, setIsVisualMode] = createSignal(false)
+  const [getPendingVisualInsert, setPendingVisualInsert] =
+    createSignal<BasicBlocklyPendingInsert | null>(null)
+  const [getPendingVisualJump, setPendingVisualJump] =
+    createSignal<BasicBlocklyPendingJump | null>(null)
 
   let editorView: EditorView | undefined
   let searchInputEl: HTMLInputElement | undefined
+  let latestContentRevision = 0
+  let nextVisualInsertId = 0
+  let nextVisualJumpId = 0
   const nameInputControl = useFormControl({
     defaultValue: "",
     async save(value) {
@@ -98,8 +117,26 @@ export const Snippets = () => {
   }
 
   const languageExtension = createMemo(() => {
-    const lang = languages.find((lang) => lang.id === snippet()?.language)
-    return lang && lang.extension
+    const languageId = snippet()?.language || "basic"
+    const selected = languages.find((lang) => lang.id === languageId)
+    if (selected?.extension) return selected.extension
+
+    // If a snippet is still stored as plaintext, keep BASIC highlighting active.
+    if (languageId === "plaintext") {
+      return languages.find((lang) => lang.id === "basic")?.extension
+    }
+
+    return undefined
+  })
+
+  const editorExtensions = createMemo(() => {
+    const extensionFactory = languageExtension()
+    return extensionFactory ? [extensionFactory()] : []
+  })
+
+  const isBasicSnippet = createMemo(() => {
+    const languageId = snippet()?.language || "basic"
+    return languageId === "basic" || languageId === "plaintext"
   })
 
   const newSnippet = async () => {
@@ -111,7 +148,7 @@ export const Snippets = () => {
         name: "Untitled",
         createdAt: d.toISOString(),
         updatedAt: d.toISOString(),
-        language: "plaintext",
+        language: "basic",
       },
       ""
     )
@@ -119,15 +156,71 @@ export const Snippets = () => {
     goto(`/snippets?${new URLSearchParams({ ...searchParams, id }).toString()}`)
   }
 
-  const persistEditorChange = debounce((value: string) => {
+  const persistEditorChange = debounce(async (
+    snippetId: string,
+    value: string,
+    revision: number
+  ) => {
     console.log("saving content..")
-    actions.updateSnippetContent(snippet()!.id, value)
+    setIsSavingContent(true)
+
+    try {
+      await actions.updateSnippetContent(snippetId, value)
+      if (revision === latestContentRevision) {
+        setIsContentDirty(false)
+      }
+    } finally {
+      setIsSavingContent(false)
+    }
   }, 250)
 
   const handleEditorChange = (value: string) => {
     if (value === content()) return
+
+    const currentSnippet = snippet()
+    if (!currentSnippet) return
+
     setContent(value)
-    persistEditorChange(value)
+    setIsContentDirty(true)
+    latestContentRevision += 1
+    persistEditorChange(currentSnippet.id, value, latestContentRevision)
+  }
+
+  const expandSnippetTemplate = (snippetTemplate: string): string => {
+    return snippetTemplate
+      .replace(/\$\{(\d+):([^}]*)\}/g, (_full, _index, fallback) => fallback)
+      .replace(/\$\{\d+\}/g, "")
+      .replace(/\$0/g, "")
+  }
+
+  const insertBasicCommandSnippet = (snippetTemplate: string) => {
+    if (isBasicSnippet() && getIsVisualMode()) {
+      const statement = expandSnippetTemplate(snippetTemplate).trim()
+      if (!statement) return
+
+      nextVisualInsertId += 1
+      setPendingVisualInsert({
+        id: nextVisualInsertId,
+        statement,
+      })
+      return
+    }
+
+    const view = editorView
+    if (!view) return
+
+    const selection = view.state.selection.main
+    createCodeMirrorSnippet(snippetTemplate)(
+      view,
+      { label: "basic-command", type: "keyword" },
+      selection.from,
+      selection.to
+    )
+    view.focus()
+  }
+
+  const openLineJump = () => {
+    setOpenLineJumpModal(true)
   }
 
   const moveSnippetToTrashOrRestore = async (id: string) => {
@@ -221,26 +314,31 @@ export const Snippets = () => {
     })
   }
 
-  const jumpToBasicLine = () => {
-    const view = editorView
-    if (!view) return
-
-    const userInput = window.prompt("Jump to BASIC line number:", "")
-    if (!userInput) return
-
-    const targetLineNumber = Number.parseInt(userInput.trim(), 10)
+  const jumpToBasicLine = (targetLineNumber: number) => {
     if (!Number.isInteger(targetLineNumber) || targetLineNumber <= 0) {
       return
     }
 
-    if (targetLineNumber > view.state.doc.lines) {
-      window.alert(`BASIC line ${targetLineNumber} not found in this script.`)
+    if (isBasicSnippet() && getIsVisualMode()) {
+      nextVisualJumpId += 1
+      setPendingVisualJump({
+        id: nextVisualJumpId,
+        lineNumber: targetLineNumber,
+      })
       return
     }
 
-    const line = view.state.doc.line(targetLineNumber)
+    const view = editorView
+    if (!view) return
+
+    const lastLine = view.state.doc.line(view.state.doc.lines)
+    const anchor =
+      targetLineNumber > view.state.doc.lines
+        ? lastLine.to
+        : view.state.doc.line(targetLineNumber).from
+
     view.dispatch({
-      selection: { anchor: line.from },
+      selection: { anchor },
       scrollIntoView: true,
     })
     view.focus()
@@ -261,6 +359,22 @@ export const Snippets = () => {
   createEffect(() => {
     actions.setFolder(searchParams.folder || null)
   })
+
+  createEffect(() => {
+    if (!isBasicSnippet() && getIsVisualMode()) {
+      setIsVisualMode(false)
+    }
+  })
+
+  createEffect(
+    on(
+      () => searchParams.id,
+      () => {
+        setPendingVisualInsert(null)
+        setPendingVisualJump(null)
+      }
+    )
+  )
 
   // load snippets from folder
   createEffect(
@@ -294,7 +408,11 @@ export const Snippets = () => {
   const loadContent = async () => {
     if (!searchParams.id) return
 
-    const content = await actions.readSnippetContent(searchParams.id)
+    if (getIsContentDirty() || getIsSavingContent()) return
+
+    const targetId = searchParams.id
+    const content = await actions.readSnippetContent(targetId)
+    if (searchParams.id !== targetId) return
     setContent(content)
   }
 
@@ -303,6 +421,9 @@ export const Snippets = () => {
     on(
       () => [searchParams.id],
       () => {
+        latestContentRevision = 0
+        setIsContentDirty(false)
+        setIsSavingContent(false)
         loadContent()
 
         // reload snippet content every 2 seconds
@@ -534,21 +655,53 @@ export const Snippets = () => {
                   onClick={() => void openRunner()}
                   tooltip={{ content: "Run BASIC in new window" }}
                 />
-                <Button
-                  type="button"
-                  onClick={jumpToBasicLine}
-                  tooltip={{ content: "Jump to BASIC line number" }}
-                >
-                  Goto
-                </Button>
-                <Button
-                  type="button"
-                  icon="i-majesticons:curly-braces"
-                  onClick={() => setOpenLanguageModal(true)}
-                  tooltip={{ content: "Select language mode" }}
-                >
-                  {getLanguageName(snippet()!.language || "plaintext")}
-                </Button>
+                <Show when={isBasicSnippet()}>
+                  <div class="inline-flex items-center rounded-lg border overflow-hidden h-8">
+                    <button
+                      type="button"
+                      class="cursor px-2 h-full"
+                      classList={{
+                        "bg-blue-500 text-white": !getIsVisualMode(),
+                        "hover:bg-zinc-100 dark:hover:bg-zinc-700":
+                          getIsVisualMode(),
+                      }}
+                      onClick={() => setIsVisualMode(false)}
+                    >
+                      Code
+                    </button>
+                    <button
+                      type="button"
+                      class="cursor px-2 h-full border-l"
+                      classList={{
+                        "bg-blue-500 text-white": getIsVisualMode(),
+                        "hover:bg-zinc-100 dark:hover:bg-zinc-700":
+                          !getIsVisualMode(),
+                      }}
+                      onClick={() => setIsVisualMode(true)}
+                    >
+                      Visual
+                    </button>
+                  </div>
+                </Show>
+                <Show when={isBasicSnippet()}>
+                  <Button
+                    type="button"
+                    onClick={openLineJump}
+                    tooltip={{ content: "Jump to BASIC line number" }}
+                  >
+                    Goto
+                  </Button>
+                </Show>
+                <Show when={isBasicSnippet()}>
+                  <Button
+                    type="button"
+                    icon="i-majesticons:curly-braces"
+                    onClick={() => setOpenBasicCommandModal(true)}
+                    tooltip={{ content: "Insert BASIC command reference" }}
+                  >
+                    Commands
+                  </Button>
+                </Show>
                 <div class="group relative">
                   <Button icon="i-ic:baseline-more-horiz"></Button>
                   <div
@@ -586,26 +739,59 @@ export const Snippets = () => {
                 </div>
               </div>
             </div>
-            <div class="h-mainBody overflow-y-auto">
-              <Editor
-                value={content()}
-                onChange={handleEditorChange}
-                onViewReady={(view) => {
-                  editorView = view
-                }}
-                extensions={languageExtension() ? [languageExtension()!()] : []}
-              />
+            <div
+              class="h-mainBody"
+              classList={{
+                "overflow-y-auto": !getIsVisualMode(),
+                "overflow-hidden": getIsVisualMode(),
+              }}
+            >
+              <Show
+                when={isBasicSnippet() && getIsVisualMode()}
+                fallback={
+                  <Editor
+                    value={content()}
+                    onChange={handleEditorChange}
+                    onTemplateTrigger={() => setOpenBasicCommandModal(true)}
+                    onViewReady={(view) => {
+                      editorView = view
+                    }}
+                    extensions={editorExtensions()}
+                  />
+                }
+              >
+                <BasicBlocklyEditor
+                  source={content()}
+                  onSourceChange={handleEditorChange}
+                  pendingInsert={getPendingVisualInsert()}
+                  onPendingInsertHandled={(id) => {
+                    if (getPendingVisualInsert()?.id === id) {
+                      setPendingVisualInsert(null)
+                    }
+                  }}
+                  pendingJump={getPendingVisualJump()}
+                  onPendingJumpHandled={(id) => {
+                    if (getPendingVisualJump()?.id === id) {
+                      setPendingVisualJump(null)
+                    }
+                  }}
+                />
+              </Show>
             </div>
           </div>
         </Show>
       </div>
       <footer class="h-footer"></footer>
-      <LanguageModal
-        open={getOpenLanguageModal()}
-        setOpen={setOpenLanguageModal}
-        setLanguage={(language) =>
-          actions.updateSnippet(snippet()!.id, "language", language)
-        }
+      <BasicCommandModal
+        open={getOpenBasicCommandModal()}
+        setOpen={setOpenBasicCommandModal}
+        insertCommandSnippet={insertBasicCommandSnippet}
+        allowedKinds={getIsVisualMode() ? ["statement"] : undefined}
+      />
+      <LineJumpModal
+        open={getOpenLineJumpModal()}
+        setOpen={setOpenLineJumpModal}
+        jumpToLine={jumpToBasicLine}
       />
       <FolderHistoryModal
         open={getOpenFolderHistoryModal()}

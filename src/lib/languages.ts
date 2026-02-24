@@ -29,6 +29,7 @@ import { dart, kotlin, scala } from "@codemirror/legacy-modes/mode/clike"
 import { r } from "@codemirror/legacy-modes/mode/r"
 import { oCaml, fSharp } from "@codemirror/legacy-modes/mode/mllike"
 import { commonLisp } from "@codemirror/legacy-modes/mode/commonlisp"
+import { basicLanguage } from "../basic/language"
 
 export const languages: {
   id: string
@@ -38,6 +39,11 @@ export const languages: {
   {
     id: "plaintext",
     name: "Plain Text",
+  },
+  {
+    id: "basic",
+    name: "BASIC",
+    extension: basicLanguage,
   },
   {
     id: "javascript",

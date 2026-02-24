@@ -5,6 +5,10 @@ import {
   type BasicExpectation,
   type BasicHarnessScenario,
 } from "../src/basic/test-harness"
+import {
+  emitBasicSourceFromVisualLines,
+  parseBasicSourceToVisualLines,
+} from "../src/basic/blockly-model"
 
 type BasicRegressionCase = {
   name: string
@@ -111,6 +115,139 @@ const cases: BasicRegressionCase[] = [
     },
     debugRows: 16,
   },
+  {
+    name: "Arrays and DIM print square values",
+    scenario: {
+      source: readGame("basic_arrays"),
+    },
+    expectation: {
+      error: null,
+      rows: [
+        { row: 0, startsWith: "N(0)=0" },
+        { row: 8, startsWith: "N(8)=64" },
+      ],
+      variables: {
+        I: 9,
+      },
+    },
+    debugRows: 12,
+  },
+  {
+    name: "GOSUB and RETURN call each subroutine in order",
+    scenario: {
+      source: `CLS
+GOSUB 6
+GOSUB 9
+GOSUB 12
+END
+COLOR 12,0
+PRINT "SUB A"
+RETURN
+COLOR 10,0
+PRINT "SUB B"
+RETURN
+COLOR 8,0
+PRINT "SUB C"
+RETURN`,
+    },
+    expectation: {
+      error: null,
+      rows: [
+        { row: 0, startsWith: "SUB A" },
+        { row: 1, startsWith: "SUB B" },
+        { row: 2, startsWith: "SUB C" },
+      ],
+    },
+    debugRows: 8,
+  },
+  {
+    name: "Palette loop writes all color rows and completion text",
+    scenario: {
+      source: readGame("basic_palette"),
+    },
+    expectation: {
+      error: null,
+      rows: [
+        { row: 2, startsWith: "  COLOR 0" },
+        { row: 17, startsWith: "  COLOR 15" },
+        { row: 22, startsWith: "  PALETTE COMPLETE" },
+      ],
+      variables: {
+        C: 16,
+      },
+    },
+    debugRows: 24,
+  },
+  {
+    name: "Shapes sample draws frame lines and label",
+    scenario: {
+      source: readGame("basic_shapes"),
+    },
+    expectation: {
+      error: null,
+      rows: [{ row: 27, contains: "RECT + LINE + COLOR TEST" }],
+      pixels: [
+        { x: 20, y: 20, equals: 10 },
+        { x: 236, y: 200, equals: 10 },
+        { x: 90, y: 70, equals: 13 },
+      ],
+    },
+    debugRows: 30,
+  },
+  {
+    name: "LET + comments + IF ELSE + STOP preserve control flow",
+    scenario: {
+      source: `10 REM START
+20 LET A=1
+30 IF A=1 THEN 50 ELSE STOP
+40 STOP
+50 ' PASS
+60 PRINT "LET OK"
+70 END`,
+    },
+    expectation: {
+      error: null,
+      rows: [{ row: 0, startsWith: "LET OK" }],
+      variables: {
+        A: 1,
+      },
+    },
+    debugRows: 8,
+  },
+  {
+    name: "PSET plots explicit pixel color",
+    scenario: {
+      source: `CLS
+COLOR 15,0
+PSET 100,100,12
+PRINT "PSET OK"
+END`,
+    },
+    expectation: {
+      error: null,
+      rows: [{ row: 0, startsWith: "PSET OK" }],
+      pixels: [{ x: 100, y: 100, equals: 12 }],
+    },
+    debugRows: 6,
+  },
+  {
+    name: "NEXT without variable uses latest FOR frame",
+    scenario: {
+      source: `CLS
+FOR I=1 TO 3
+PRINT I;
+NEXT
+END`,
+    },
+    expectation: {
+      error: null,
+      rows: [{ row: 0, startsWith: "123" }],
+      variables: {
+        I: 4,
+      },
+    },
+    debugRows: 6,
+  },
 ]
 
 const printRowSnapshot = (rows: string[], maxRows: number): void => {
@@ -123,8 +260,21 @@ const printRowSnapshot = (rows: string[], maxRows: number): void => {
 
 const main = async (): Promise<void> => {
   let failures = 0
+  const allCases: BasicRegressionCase[] = [
+    ...cases,
+    ...cases.map((testCase) => ({
+      ...testCase,
+      name: `${testCase.name} [Visual roundtrip]`,
+      scenario: {
+        ...testCase.scenario,
+        source: emitBasicSourceFromVisualLines(
+          parseBasicSourceToVisualLines(testCase.scenario.source)
+        ),
+      },
+    })),
+  ]
 
-  for (const testCase of cases) {
+  for (const testCase of allCases) {
     const { result, failures: assertionFailures } = await runAndAssertBasicScenario(
       testCase.scenario,
       testCase.expectation
@@ -155,7 +305,7 @@ const main = async (): Promise<void> => {
     return
   }
 
-  console.log(`\nAll ${cases.length} regression cases passed.`)
+  console.log(`\nAll ${allCases.length} regression cases passed.`)
 }
 
 void main()

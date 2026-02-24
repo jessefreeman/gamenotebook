@@ -39,6 +39,22 @@ input:focus {
   @apply font-mono !important;
 }
 
+/* Keep line-number gutter width stable across files (1-digit vs 2+ digits). */
+.cm-editor .cm-gutters {
+  font-variant-numeric: tabular-nums;
+}
+
+.cm-editor .cm-lineNumbers {
+  min-width: 4ch;
+  width: 4ch;
+}
+
+.cm-editor .cm-lineNumbers .cm-gutterElement {
+  box-sizing: border-box;
+  width: 100%;
+  text-align: right;
+}
+
 .cursor {
   @apply cursor-default;
 }
@@ -73,4 +89,8 @@ input:focus {
 .scrollbar-group.custom-scrollbar:hover::-webkit-scrollbar-thumb,
 .cm-editor:hover .cm-scroller::-webkit-scrollbar-thumb {
   @apply opacity-100;
+}
+
+.basic-blockly-editor .blocklySvg {
+  background: transparent;
 }
