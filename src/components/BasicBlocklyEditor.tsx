@@ -28,6 +28,11 @@ export type BasicBlocklyPendingJump = {
   lineNumber: number
 }
 
+export type BasicBlocklyPendingHistoryAction = {
+  id: number
+  type: "undo" | "redo"
+}
+
 export const BasicBlocklyEditor = (props: {
   source: string
   onSourceChange: (source: string) => void
@@ -35,6 +40,8 @@ export const BasicBlocklyEditor = (props: {
   onPendingInsertHandled?: (id: number) => void
   pendingJump?: BasicBlocklyPendingJump | null
   onPendingJumpHandled?: (id: number) => void
+  pendingHistoryAction?: BasicBlocklyPendingHistoryAction | null
+  onPendingHistoryActionHandled?: (id: number) => void
 }) => {
   let hostEl: HTMLDivElement | undefined
   let workspace: Blockly.WorkspaceSvg | null = null
@@ -221,6 +228,18 @@ export const BasicBlocklyEditor = (props: {
         }
 
         props.onPendingJumpHandled?.(pendingJump.id)
+      }
+    )
+  )
+
+  createEffect(
+    on(
+      () => props.pendingHistoryAction,
+      (pendingHistoryAction) => {
+        if (!pendingHistoryAction || !workspace) return
+
+        workspace.undo(pendingHistoryAction.type === "redo")
+        props.onPendingHistoryActionHandled?.(pendingHistoryAction.id)
       }
     )
   )

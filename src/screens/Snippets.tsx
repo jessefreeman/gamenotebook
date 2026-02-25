@@ -15,11 +15,11 @@ import { Editor } from "../components/Editor"
 import {
   BasicBlocklyEditor,
   type BasicBlocklyPendingJump,
+  type BasicBlocklyPendingHistoryAction,
   type BasicBlocklyPendingInsert,
 } from "../components/BasicBlocklyEditor"
 import {
   BasicCommandModal,
-  FolderHistoryModal,
   LineJumpModal,
 } from "../components/Modal"
 import { languages } from "../lib/languages"
@@ -27,20 +27,17 @@ import { debounce } from "../lib/utils"
 import { actions, state } from "../store"
 import { Button } from "../components/Button"
 import { timeago } from "../lib/date"
-import { path } from "@tauri-apps/api"
 import { BasicRunnerCanvas } from "../components/BasicRunnerCanvas"
 
 type SnippetMainMode = "play" | "code" | "build"
 
 export const Snippets = () => {
   const goto = useNavigate()
-  const [searchParams] = useSearchParams<{ folder: string; id?: string }>()
+  const [searchParams] = useSearchParams<{ id?: string }>()
   const [content, setContent] = createSignal("")
   const [getOpenBasicCommandModal, setOpenBasicCommandModal] =
     createSignal(false)
   const [getOpenLineJumpModal, setOpenLineJumpModal] = createSignal(false)
-  const [getOpenFolderHistoryModal, setOpenFolderHistoryModal] =
-    createSignal(false)
   const [getSearchType, setSearchType] = createSignal<"non-trash" | "trash">(
     "non-trash"
   )
@@ -68,6 +65,8 @@ export const Snippets = () => {
     createSignal<BasicBlocklyPendingInsert | null>(null)
   const [getPendingBuildJump, setPendingBuildJump] =
     createSignal<BasicBlocklyPendingJump | null>(null)
+  const [getPendingBuildHistoryAction, setPendingBuildHistoryAction] =
+    createSignal<BasicBlocklyPendingHistoryAction | null>(null)
 
   let editorView: EditorView | undefined
   let searchInputEl: HTMLInputElement | undefined
@@ -78,6 +77,7 @@ export const Snippets = () => {
   let latestContentRevision = 0
   let nextBuildInsertId = 0
   let nextBuildJumpId = 0
+  let nextBuildHistoryActionId = 0
   let handledTrashDropForCurrentDrag = false
   let suppressTrashButtonClick = false
 
@@ -148,6 +148,11 @@ export const Snippets = () => {
   const runShortcutLabel = createMemo(() =>
     state.isMac ? "⌘ + Enter" : "Ctrl + Enter"
   )
+  const hasActiveStorage = createMemo(
+    () =>
+      state.app.storageMode === "local" ||
+      Boolean(state.app.storageMode === "folder" && state.app.storageFolder)
+  )
 
   const isPlayMode = createMemo(() => getMainMode() === "play")
   const isBuildMode = createMemo(() => getMainMode() === "build")
@@ -159,6 +164,11 @@ export const Snippets = () => {
   }
 
   const newSnippet = async () => {
+    if (!hasActiveStorage()) {
+      openSettings()
+      return
+    }
+
     const d = new Date()
     const id = actions.getRandomId()
     await actions.createSnippet(
@@ -174,16 +184,12 @@ export const Snippets = () => {
     setSearchType("non-trash")
     setInlineRenameSnippetId(id)
     setInlineRenameValue("Untitled")
-    goto(`/scripts?${new URLSearchParams({ ...searchParams, id }).toString()}`)
+    setMainMode(state.app.defaultEditor)
+    goto(`/scripts?${new URLSearchParams({ id }).toString()}`)
   }
 
   const openSettings = () => {
-    const params = new URLSearchParams()
-    if (searchParams.folder) {
-      params.set("folder", searchParams.folder)
-    }
-    const query = params.toString()
-    goto(query ? `/settings?${query}` : "/settings")
+    goto("/settings")
   }
 
   const startInlineRename = (
@@ -480,6 +486,44 @@ export const Snippets = () => {
     return state.isMac ? event.metaKey : event.ctrlKey
   }
 
+  const shouldIgnoreDesignerShortcut = (event: KeyboardEvent) => {
+    const target = event.target as HTMLElement | null
+    if (!target) return false
+
+    const tagName = target.tagName
+    if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") {
+      return true
+    }
+
+    return target.isContentEditable
+  }
+
+  const isUndoShortcut = (event: KeyboardEvent) => {
+    if (event.key.toLowerCase() !== "z") return false
+    if (event.shiftKey || event.altKey) return false
+    return state.isMac ? event.metaKey : event.ctrlKey
+  }
+
+  const isRedoShortcut = (event: KeyboardEvent) => {
+    if (event.altKey) return false
+
+    const key = event.key.toLowerCase()
+    if (state.isMac) {
+      return event.metaKey && event.shiftKey && key === "z"
+    }
+
+    return (event.ctrlKey && event.shiftKey && key === "z") || (event.ctrlKey && key === "y")
+  }
+
+  const queueBuildHistoryAction = (type: "undo" | "redo") => {
+    if (!isBasicSnippet() || !isBuildMode()) return
+    nextBuildHistoryActionId += 1
+    setPendingBuildHistoryAction({
+      id: nextBuildHistoryActionId,
+      type,
+    })
+  }
+
   const jumpToBasicLine = (targetLineNumber: number) => {
     if (!Number.isInteger(targetLineNumber) || targetLineNumber <= 0) {
       return
@@ -539,6 +583,26 @@ export const Snippets = () => {
 
   createEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
+      if (
+        isBasicSnippet() &&
+        isBuildMode() &&
+        !shouldIgnoreDesignerShortcut(event)
+      ) {
+        if (isUndoShortcut(event)) {
+          event.preventDefault()
+          event.stopPropagation()
+          queueBuildHistoryAction("undo")
+          return
+        }
+
+        if (isRedoShortcut(event)) {
+          event.preventDefault()
+          event.stopPropagation()
+          queueBuildHistoryAction("redo")
+          return
+        }
+      }
+
       if (!isRunShortcut(event)) return
       event.preventDefault()
       event.stopPropagation()
@@ -566,10 +630,6 @@ export const Snippets = () => {
   )
 
   createEffect(() => {
-    actions.setFolder(searchParams.folder || null)
-  })
-
-  createEffect(() => {
     if (!isBasicSnippet() && getMainMode() !== "code") {
       setMainMode("code")
     }
@@ -581,6 +641,7 @@ export const Snippets = () => {
       () => {
         setPendingBuildInsert(null)
         setPendingBuildJump(null)
+        setPendingBuildHistoryAction(null)
         if (isBasicSnippet() && isPlayMode()) {
           setPlayRunVersion((version) => version + 1)
         }
@@ -596,23 +657,21 @@ export const Snippets = () => {
     })
   )
 
-  // load snippets from folder
+  // load snippets from active storage
   createEffect(
     on(
-      () => [searchParams.folder],
+      () => [state.app.storageMode, state.app.storageFolder],
       () => {
-        if (!searchParams.folder) return
+        void actions.loadActiveStorage()
 
-        void actions.loadFolder(searchParams.folder)
-
-        // reload snippets from folder every 2 seconds
-        const watchFolder = window.setInterval(() => {
+        // reload snippets every 2 seconds for external/local file changes
+        const watchStorage = window.setInterval(() => {
           if (getInlineRenameSnippetId()) return
-          void actions.loadFolder(searchParams.folder)
+          void actions.loadActiveStorage()
         }, 2000)
 
         onCleanup(() => {
-          window.clearInterval(watchFolder)
+          window.clearInterval(watchStorage)
         })
       }
     )
@@ -666,19 +725,6 @@ export const Snippets = () => {
             <Show when={state.isMac}>
               <div class="h-6" data-tauri-drag-region></div>
             </Show>
-            <div
-              class="flex items-center px-2 h-10 shrink-0"
-            >
-              <Button
-                type="button"
-                onClick={() => setOpenFolderHistoryModal(true)}
-                tooltip={{ content: "Select folder" }}
-                icon="i-bi:folder"
-                class="-ml-[1px] max-w-full"
-              >
-                {state.folder?.split(path.sep).pop()}
-              </Button>
-            </div>
             <div class="px-3 pb-2">
               <div class="h-2/5 flex items-center gap-1">
                 <input
@@ -759,10 +805,7 @@ export const Snippets = () => {
               {(snippet) => {
                 return (
                   <Link
-                    href={`/scripts?${new URLSearchParams({
-                      ...searchParams,
-                      id: snippet.id,
-                    }).toString()}`}
+                    href={`/scripts?${new URLSearchParams({ id: snippet.id }).toString()}`}
                     draggable={getInlineRenameSnippetId() !== snippet.id}
                     classList={{
                       "group text-sm px-2 block select-none rounded-lg py-1 cursor":
@@ -863,7 +906,9 @@ export const Snippets = () => {
               class="h-full w-full flex items-center justify-center px-20 text-center text-zinc-400 text-xl"
             >
               <span class="select-none">
-                Select or create a script from sidebar
+                {hasActiveStorage()
+                  ? "Select or create a script from sidebar"
+                  : "Select a folder in Settings to use folder storage"}
               </span>
             </div>
           }
@@ -996,6 +1041,12 @@ export const Snippets = () => {
                           setPendingBuildJump(null)
                         }
                       }}
+                      pendingHistoryAction={getPendingBuildHistoryAction()}
+                      onPendingHistoryActionHandled={(id) => {
+                        if (getPendingBuildHistoryAction()?.id === id) {
+                          setPendingBuildHistoryAction(null)
+                        }
+                      }}
                     />
                   </Show>
                 }
@@ -1022,10 +1073,6 @@ export const Snippets = () => {
         open={getOpenLineJumpModal()}
         setOpen={setOpenLineJumpModal}
         jumpToLine={jumpToBasicLine}
-      />
-      <FolderHistoryModal
-        open={getOpenFolderHistoryModal()}
-        setOpen={setOpenFolderHistoryModal}
       />
       <div
         classList={{

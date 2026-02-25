@@ -287,7 +287,7 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
       {
         type: "field_input",
         name: "VALUE",
-        text: "\"HELLO\"",
+        text: "HELLO",
       },
     ],
     previousStatement: null,

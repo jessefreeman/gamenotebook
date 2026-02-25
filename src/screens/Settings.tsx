@@ -1,26 +1,30 @@
-import { Link, useSearchParams } from "@solidjs/router"
-import { createMemo, createSignal, Show } from "solid-js"
+import { Link } from "@solidjs/router"
+import { dialog } from "@tauri-apps/api"
+import { createSignal, Show } from "solid-js"
+import { actions, state, type DefaultEditor } from "../store"
 
 export const Settings = () => {
-  const [searchParams] = useSearchParams<{ folder?: string }>()
-  const [getStorageLocation, setStorageLocation] = createSignal<"local" | "folder">(
-    "local"
-  )
   const [getEditorFontSize, setEditorFontSize] = createSignal("14")
-  const [getDefaultEditor, setDefaultEditor] = createSignal<"code" | "build">(
-    "code"
-  )
   const [getRunnerMode, setRunnerMode] = createSignal<"same" | "separate">(
     "same"
   )
 
-  const scriptsHref = createMemo(() => {
-    if (!searchParams.folder) {
-      return "/scripts"
-    }
+  const setStorageMode = async (mode: "local" | "folder") => {
+    await actions.setStorageMode(mode)
+  }
 
-    return `/scripts?${new URLSearchParams({ folder: searchParams.folder }).toString()}`
-  })
+  const chooseFolder = async () => {
+    const folder = await dialog.open({
+      directory: true,
+      multiple: false,
+    })
+    if (typeof folder !== "string") return
+    await actions.loadFolder(folder)
+  }
+
+  const setDefaultEditor = async (mode: DefaultEditor) => {
+    await actions.setDefaultEditor(mode)
+  }
 
   return (
     <div class="h-screen overflow-y-auto custom-scrollbar scrollbar-group">
@@ -32,7 +36,7 @@ export const Settings = () => {
           >
             <h1 class="text-sm font-medium">Settings</h1>
             <Link
-              href={scriptsHref()}
+              href="/scripts"
               class="h-7 px-2 border rounded-lg inline-flex items-center text-xs hover:bg-zinc-100 dark:hover:bg-zinc-600"
             >
               Back to Scripts
@@ -48,28 +52,32 @@ export const Settings = () => {
                 <input
                   type="radio"
                   name="storage-location"
-                  checked={getStorageLocation() === "local"}
-                  onChange={() => setStorageLocation("local")}
+                  checked={state.app.storageMode === "local"}
+                  onChange={() => void setStorageMode("local")}
                 />
-                <span>Save scripts locally</span>
+                <span>Inside the app (default)</span>
               </label>
               <label class="flex items-center gap-2">
                 <input
                   type="radio"
                   name="storage-location"
-                  checked={getStorageLocation() === "folder"}
-                  onChange={() => setStorageLocation("folder")}
+                  checked={state.app.storageMode === "folder"}
+                  onChange={() => void setStorageMode("folder")}
                 />
-                <span>Pick a folder</span>
+                <span>Use a folder on this machine</span>
               </label>
-              <Show when={getStorageLocation() === "folder"}>
+              <Show when={state.app.storageMode === "folder"}>
                 <div class="pt-1">
                   <button
                     type="button"
-                    class="h-7 px-2 border rounded-lg inline-flex items-center text-xs opacity-50 cursor-not-allowed"
+                    class="h-7 px-2 border rounded-lg inline-flex items-center text-xs hover:bg-zinc-100 dark:hover:bg-zinc-600"
+                    onClick={() => void chooseFolder()}
                   >
-                    Choose Folder (coming soon)
+                    Choose Folder
                   </button>
+                  <p class="pt-2 text-xs text-zinc-500 dark:text-zinc-300 break-all">
+                    {state.app.storageFolder || "No folder selected yet."}
+                  </p>
                 </div>
               </Show>
             </section>
@@ -100,8 +108,8 @@ export const Settings = () => {
                 <input
                   type="radio"
                   name="default-editor"
-                  checked={getDefaultEditor() === "code"}
-                  onChange={() => setDefaultEditor("code")}
+                  checked={state.app.defaultEditor === "code"}
+                  onChange={() => void setDefaultEditor("code")}
                 />
                 <span>Code editor</span>
               </label>
@@ -109,8 +117,8 @@ export const Settings = () => {
                 <input
                   type="radio"
                   name="default-editor"
-                  checked={getDefaultEditor() === "build"}
-                  onChange={() => setDefaultEditor("build")}
+                  checked={state.app.defaultEditor === "build"}
+                  onChange={() => void setDefaultEditor("build")}
                 />
                 <span>Build editor</span>
               </label>
