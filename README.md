@@ -31,7 +31,20 @@ The app now includes BASIC runtime support in the existing two-pane snippets lay
 1. Runner windows use Tauri window label `basic-runner`.
 2. Pressing `Play` updates the active runner with the latest snippet source.
 3. Runner window title matches the snippet/file name.
-4. `INPUT` in BASIC uses native prompt dialogs (no runner-side form UI).
+4. `INPUT` in BASIC uses an in-runner input overlay (no native prompt dependency).
+
+### BASIC Regression Harness
+
+Run interpreter regressions:
+
+```bash
+pnpm test:basic
+```
+
+Where to extend it:
+
+1. Harness/API: `src/basic/test-harness.ts`
+2. Regression suite: `scripts/basic-regression-tests.ts`
 
 ## Local Development (GameNotebook)
 

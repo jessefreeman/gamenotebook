@@ -1,4 +1,3 @@
-import { PixelTextRenderer } from "./renderer"
 import { stringToAsciiCode } from "./ascii"
 
 type BasicValue = number | string
@@ -17,11 +16,33 @@ type ForFrame = {
   loopStartIp: number
 }
 
+type BasicRenderer = {
+  clear: (colorIndex?: number) => void
+  setColor: (fgColor: number, bgColor?: number) => void
+  locate: (col: number, row: number) => void
+  write: (text: string) => void
+  printLine: (text?: string) => void
+  newLine: () => void
+  tab: () => void
+  pset: (x: number, y: number, color?: number) => void
+  line: (x1: number, y1: number, x2: number, y2: number, color?: number) => void
+  rect: (x: number, y: number, width: number, height: number, color?: number) => void
+}
+
 type BasicHost = {
-  renderer: PixelTextRenderer
+  renderer: BasicRenderer
   requestInput: (prompt: string) => Promise<string>
   consumeKey: () => string | null
   onLog?: (message: string) => void
+}
+
+type BasicRuntimeSnapshot = {
+  ip: number
+  nextIp: number | null
+  halted: boolean
+  steps: number
+  variables: Record<string, BasicValue>
+  arrays: Record<string, BasicValue[]>
 }
 
 type Token =
@@ -475,6 +496,27 @@ export class BasicRuntime {
     this.halted = true
   }
 
+  getSnapshot(): BasicRuntimeSnapshot {
+    const variables: Record<string, BasicValue> = {}
+    for (const [name, value] of this.variables.entries()) {
+      variables[name] = value
+    }
+
+    const arrays: Record<string, BasicValue[]> = {}
+    for (const [name, values] of this.arrays.entries()) {
+      arrays[name] = [...values]
+    }
+
+    return {
+      ip: this.ip,
+      nextIp: this.nextIp,
+      halted: this.halted,
+      steps: this.steps,
+      variables,
+      arrays,
+    }
+  }
+
   async run(source: string): Promise<void> {
     this.reset()
     this.program = this.parseProgram(source)
@@ -506,7 +548,9 @@ export class BasicRuntime {
         throw new Error("Execution stopped: step guard exceeded")
       }
       if (this.steps % YIELD_INTERVAL === 0) {
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+        await new Promise<void>((resolve) => {
+          globalThis.setTimeout(resolve, 0)
+        })
       }
     }
   }
@@ -910,10 +954,13 @@ export class BasicRuntime {
       }
     }
 
-    segments.push({
-      expression: tail.slice(start),
-      separator: null,
-    })
+    const trailingExpression = tail.slice(start)
+    if (trailingExpression.length > 0 || segments.length === 0) {
+      segments.push({
+        expression: trailingExpression,
+        separator: null,
+      })
+    }
 
     return segments
   }
@@ -1153,4 +1200,4 @@ export class BasicRuntime {
   }
 }
 
-export type { BasicHost, BasicValue }
+export type { BasicHost, BasicRenderer, BasicValue, BasicRuntimeSnapshot }

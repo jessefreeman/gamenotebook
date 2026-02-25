@@ -5,22 +5,22 @@ const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value))
 
 const PALETTE = [
-  "#000000",
-  "#1D2B53",
-  "#7E2553",
-  "#008751",
-  "#AB5236",
-  "#5F574F",
-  "#C2C3C7",
-  "#FFF1E8",
-  "#FF004D",
-  "#FFA300",
-  "#FFEC27",
-  "#00E436",
-  "#29ADFF",
-  "#83769C",
-  "#FF77A8",
-  "#FFCCAA",
+  "#2D1B2E",
+  "#218A91",
+  "#3CC2FA",
+  "#9AF6FD",
+  "#4A247C",
+  "#574B67",
+  "#937AC5",
+  "#8AE25D",
+  "#8E2B45",
+  "#F04156",
+  "#F272CE",
+  "#D3C0A8",
+  "#C5754A",
+  "#F2A759",
+  "#F7DB53",
+  "#F9F4EA",
 ]
 
 export class PixelTextRenderer {
@@ -36,6 +36,7 @@ export class PixelTextRenderer {
   private readonly tintedAtlases = new Map<number, HTMLCanvasElement>()
   private cursorX = 0
   private cursorY = 0
+  private pendingWrap = false
   private fgColor = 7
   private bgColor = 0
 
@@ -62,6 +63,7 @@ export class PixelTextRenderer {
     this.ctx.fillRect(0, 0, this.width, this.height)
     this.cursorX = 0
     this.cursorY = 0
+    this.pendingWrap = false
     this.bgColor = this.normalizeColorIndex(colorIndex)
   }
 
@@ -73,6 +75,7 @@ export class PixelTextRenderer {
   locate(col: number, row: number): void {
     this.cursorX = clamp(Math.trunc(col), 0, this.cols - 1)
     this.cursorY = clamp(Math.trunc(row), 0, this.rows - 1)
+    this.pendingWrap = false
   }
 
   write(text: string): void {
@@ -82,11 +85,7 @@ export class PixelTextRenderer {
         continue
       }
 
-      this.drawChar(char)
-      this.cursorX += 1
-      if (this.cursorX >= this.cols) {
-        this.newLine()
-      }
+      this.putChar(char)
     }
   }
 
@@ -96,6 +95,7 @@ export class PixelTextRenderer {
   }
 
   newLine(): void {
+    this.pendingWrap = false
     this.cursorX = 0
     this.cursorY += 1
     if (this.cursorY >= this.rows) {
@@ -108,8 +108,7 @@ export class PixelTextRenderer {
     const tabSize = 4
     const nextStop = Math.min(this.cols - 1, Math.ceil((this.cursorX + 1) / tabSize) * tabSize)
     while (this.cursorX < nextStop) {
-      this.drawChar(" ")
-      this.cursorX += 1
+      this.putChar(" ")
     }
   }
 
@@ -182,6 +181,21 @@ export class PixelTextRenderer {
       this.charWidth,
       this.charHeight
     )
+  }
+
+  private putChar(char: string): void {
+    if (this.pendingWrap) {
+      this.newLine()
+    }
+
+    this.drawChar(char)
+
+    if (this.cursorX >= this.cols - 1) {
+      this.pendingWrap = true
+      return
+    }
+
+    this.cursorX += 1
   }
 
   private getTintedAtlas(colorIndex: number): HTMLCanvasElement {

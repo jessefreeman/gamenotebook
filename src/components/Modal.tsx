@@ -11,7 +11,11 @@ import {
   type JSX,
 } from "solid-js"
 import { Portal } from "solid-js/web"
-import { languages } from "../lib/languages"
+import {
+  BASIC_COMMAND_ENTRIES,
+  type BasicCommandKind,
+  type BasicCommandEntry,
+} from "../basic/command-templates"
 import { useOpenFolderDialog } from "../lib/open-folder"
 import { actions, type Snippet, state } from "../store"
 
@@ -48,6 +52,8 @@ const Modal = (props: { children: JSX.Element; close: () => void }) => {
 interface Item {
   icon?: string
   text: string
+  syntax?: string
+  detail?: string
   onClick: () => void
 }
 
@@ -58,6 +64,7 @@ const PromptModal = (props: {
   close: () => void
   keyword: string
   setKeyword: (keyword: string) => void
+  emptyMessage?: string
 }) => {
   let input: HTMLInputElement | undefined
 
@@ -82,6 +89,19 @@ const PromptModal = (props: {
     scrollItemIntoView(getSelectedIndex())
   })
 
+  createEffect(() => {
+    if (props.items.length === 0) {
+      setSelectedIndex(0)
+      return
+    }
+
+    setSelectedIndex((index) => {
+      if (index < 0) return 0
+      if (index >= props.items.length) return props.items.length - 1
+      return index
+    })
+  })
+
   return (
     <Modal close={closeModal}>
       <label class="block px-2 py-2">
@@ -97,15 +117,18 @@ const PromptModal = (props: {
               e.preventDefault()
               closeModal()
             } else if (e.key === "ArrowDown") {
+              if (props.items.length === 0) return
               setSelectedIndex((index) =>
                 index === props.items.length - 1 ? 0 : index + 1
               )
             } else if (e.key === "ArrowUp") {
+              if (props.items.length === 0) return
               setSelectedIndex((index) =>
                 index === 0 ? props.items.length - 1 : index - 1
               )
             } else if (e.key === "Enter") {
               e.preventDefault()
+              if (props.items.length === 0) return
               const item = props.items.find(
                 (_, index) => index === getSelectedIndex()
               )
@@ -121,7 +144,7 @@ const PromptModal = (props: {
           {(item, index) => (
             <div
               id={`item-${index()}`}
-              class="px-2 py-1 cursor flex items-center text-center space-x-1"
+              class="px-2 py-1 cursor flex items-start text-left space-x-1"
               classList={{
                 "bg-zinc-200 dark:bg-zinc-700": getSelectedIndex() === index(),
                 "hover:bg-zinc-100 dark:hover:bg-zinc-700":
@@ -132,34 +155,69 @@ const PromptModal = (props: {
               <Show when={item.icon}>
                 <span classList={{ [item.icon!]: true }}></span>
               </Show>
-              <span class="truncate">{item.text}</span>
+              <div class="min-w-0 text-left">
+                <div class="truncate">{item.text}</div>
+                <Show when={item.syntax}>
+                  <div class="truncate font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
+                    {item.syntax}
+                  </div>
+                </Show>
+                <Show when={item.detail}>
+                  <div class="truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+                    {item.detail}
+                  </div>
+                </Show>
+              </div>
             </div>
           )}
         </For>
+        <Show when={props.items.length === 0}>
+          <div class="px-2 py-2 text-xs text-zinc-500 dark:text-zinc-400">
+            {props.emptyMessage || "No results"}
+          </div>
+        </Show>
       </div>
     </Modal>
   )
 }
 
-export const LanguageModal = (props: {
-  setLanguage: (language: string) => void
+export const BasicCommandModal = (props: {
+  insertCommandSnippet: (snippet: string) => void
   open: boolean
   setOpen: (open: boolean) => void
+  allowedKinds?: BasicCommandKind[]
 }) => {
   const [getKeyword, setKeyword] = createSignal("")
 
   const items: Accessor<Item[]> = createMemo(() => {
-    const keyword = getKeyword()
+    const keyword = getKeyword().trim().toLowerCase()
+    const terms = keyword ? keyword.split(/\s+/).filter(Boolean) : []
 
-    return languages
-      .filter((lang) =>
-        keyword ? lang.name.toLowerCase().includes(keyword) : true
-      )
-      .map((lang) => {
+    return BASIC_COMMAND_ENTRIES
+      .filter((entry: BasicCommandEntry) => {
+        if (!props.allowedKinds || props.allowedKinds.length === 0) {
+          return true
+        }
+
+        return props.allowedKinds.includes(entry.kind)
+      })
+      .filter((entry: BasicCommandEntry) => {
+        if (terms.length === 0) return true
+
+        const haystack = [entry.label, entry.syntax]
+          .concat(entry.searchTokens)
+          .join(" ")
+          .toLowerCase()
+
+        return terms.every((term) => haystack.includes(term))
+      })
+      .map((entry: BasicCommandEntry) => {
         return {
-          text: `${lang.name} (${lang.id})`,
+          text: entry.label,
+          syntax: entry.syntax,
+          detail: `${entry.kind}: ${entry.description}`,
           onClick() {
-            props.setLanguage(lang.id)
+            props.insertCommandSnippet(entry.insertSnippet)
             props.setOpen(false)
             setKeyword("")
           },
@@ -172,8 +230,53 @@ export const LanguageModal = (props: {
       <PromptModal
         keyword={getKeyword()}
         setKeyword={setKeyword}
-        placeholder="Select language mode"
+        placeholder="Search BASIC commands/functions"
         items={items()}
+        close={() => props.setOpen(false)}
+      ></PromptModal>
+    </Show>
+  )
+}
+
+export const LineJumpModal = (props: {
+  open: boolean
+  setOpen: (open: boolean) => void
+  jumpToLine: (lineNumber: number) => void
+}) => {
+  const [getKeyword, setKeyword] = createSignal("")
+
+  const items = createMemo<Item[]>(() => {
+    const value = getKeyword().trim()
+    if (!value) return []
+    if (!/^\d+$/.test(value)) return []
+
+    const lineNumber = Number.parseInt(value, 10)
+    if (!Number.isInteger(lineNumber) || lineNumber <= 0) {
+      return []
+    }
+
+    return [
+      {
+        text: `Go to line ${lineNumber}`,
+        syntax: `line ${lineNumber}`,
+        detail: "Press Enter to jump",
+        onClick() {
+          props.jumpToLine(lineNumber)
+          props.setOpen(false)
+          setKeyword("")
+        },
+      },
+    ]
+  })
+
+  return (
+    <Show when={props.open}>
+      <PromptModal
+        keyword={getKeyword()}
+        setKeyword={setKeyword}
+        placeholder="Jump to BASIC line number"
+        items={items()}
+        emptyMessage="Type a positive line number"
         close={() => props.setOpen(false)}
       ></PromptModal>
     </Show>
