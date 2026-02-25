@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test:basic": "node -r esbuild-register scripts/basic-regression-tests.ts",
+    "check:release-workflow": "node scripts/check-tag-release-workflow.cjs --strict",
     "tauri": "tauri",
     "dev:live": "CARGO_TARGET_DIR=/tmp/gamenotebook-dev-target npx -y pnpm@7 tauri dev",
     "dev:tauri": "pnpm dev:live",

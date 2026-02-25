@@ -1,0 +1,33 @@
+name: Release Workflow Guardrails
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/tag-release-builds.yml"
+      - "scripts/check-tag-release-workflow.cjs"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/tag-release-builds.yml"
+      - "scripts/check-tag-release-workflow.cjs"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-release-workflow:
+    name: Validate release workflow invariants
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check tag release workflow
+        run: node scripts/check-tag-release-workflow.cjs --strict
