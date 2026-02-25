@@ -129,6 +129,7 @@ Output layout:
 
 GitHub Actions uses the same local build command per OS (`pnpm build:release -- --platform <os>`), then uploads `release-files/*` to the tag release.
 If one platform build fails, the workflow still publishes the release with whichever platform artifacts were produced successfully.
+Tag builds automatically sync `package.json` and `src-tauri/tauri.conf.json` versions from the tag (for example, `v0.2.4` -> `0.2.4`) during the workflow, so manual version bumps are not required before tagging.
 
 Detailed build architecture and hardening notes:
 `docs/build-system-hardening.md`

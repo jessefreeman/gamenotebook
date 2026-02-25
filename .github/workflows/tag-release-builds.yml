@@ -47,15 +47,8 @@ jobs:
             exit 1
           fi
 
-      - name: Validate tag matches app version
-        shell: bash
-        run: |
-          tag_version="${GITHUB_REF_NAME#v}"
-          app_version=$(node -p "require('./src-tauri/tauri.conf.json').package.version")
-          if [[ "${tag_version}" != "${app_version}" ]]; then
-            echo "::error::Tag version (${tag_version}) must match src-tauri/tauri.conf.json package.version (${app_version})."
-            exit 1
-          fi
+      - name: Sync app versions from tag
+        run: node scripts/sync-version-from-tag.cjs --tag ${{ github.ref_name }}
 
       - name: Validate release workflow invariants
         run: node scripts/check-tag-release-workflow.cjs --strict
@@ -78,6 +71,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Sync app versions from tag
+        run: node scripts/sync-version-from-tag.cjs --tag ${{ github.ref_name }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

@@ -24,9 +24,10 @@ The build system now follows a local-first architecture:
 Core files:
 
 1. `scripts/build-release-artifacts.cjs`
-2. `.github/workflows/tag-release-builds.yml`
-3. `scripts/check-tag-release-workflow.cjs`
-4. `package.json`
+2. `scripts/sync-version-from-tag.cjs`
+3. `.github/workflows/tag-release-builds.yml`
+4. `scripts/check-tag-release-workflow.cjs`
+5. `package.json`
 
 ## Local Build Commands
 
@@ -102,14 +103,15 @@ The release workflow now has three clear phases:
 
 1. Validate tag format (`v<major>.<minor>.<patch>`).
 2. Ensure tag commit is on `main`.
-3. Ensure tag version matches `src-tauri/tauri.conf.json`.
+3. Sync `package.json` and `src-tauri/tauri.conf.json` versions from the tag.
 4. Run workflow invariant checks.
 
 ### Build phase (matrix by OS)
 
-1. Setup `pnpm`, Node, Rust, and Linux system deps.
-2. Run `pnpm build:release -- --platform <os>`.
-3. Upload `release-files/*` as artifacts.
+1. Sync `package.json` and `src-tauri/tauri.conf.json` versions from the tag.
+2. Setup `pnpm`, Node, Rust, and Linux system deps.
+3. Run `pnpm build:release -- --platform <os>`.
+4. Upload `release-files/*` as artifacts.
 
 ### Release phase
 
@@ -196,6 +198,18 @@ Fix:
 
 1. Script snapshots these files before build and restores them in `finally`.
 2. Release runs are reproducible and do not dirty the git tree unexpectedly.
+
+### 8) Manual JSON version bumps causing tag workflow failures
+
+Problem:
+
+1. Release tags could fail preflight when JSON versions were not manually updated first.
+2. Manual version editing before every tag was unnecessary work and error-prone.
+
+Fix:
+
+1. Added `scripts/sync-version-from-tag.cjs`.
+2. Workflow now syncs `package.json` and `src-tauri/tauri.conf.json` from `GITHUB_REF_NAME` during preflight and build jobs.
 
 ## Guardrails and Drift Prevention
 

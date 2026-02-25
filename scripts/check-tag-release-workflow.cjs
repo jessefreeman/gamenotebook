@@ -22,6 +22,13 @@ const requireSnippet = (snippet, message) => {
   }
 }
 
+const requireCountAtLeast = (snippet, count, message) => {
+  const occurrences = workflow.split(snippet).length - 1
+  if (occurrences < count) {
+    failures.push(message)
+  }
+}
+
 const requireScript = (name, expectedSnippet, message) => {
   const script = scripts[name]
   if (!script || !script.includes(expectedSnippet)) {
@@ -66,8 +73,19 @@ requireSnippet(
   "Preflight must verify the tagged commit is on origin/main history."
 )
 requireSnippet(
-  "require('./src-tauri/tauri.conf.json').package.version",
-  "Preflight must validate tag version against src-tauri/tauri.conf.json."
+  "run: node scripts/sync-version-from-tag.cjs --tag ${{ github.ref_name }}",
+  "Workflow must sync app versions from the tag."
+)
+requireCountAtLeast(
+  "Sync app versions from tag",
+  2,
+  "Workflow must sync versions from tag in both preflight and build jobs."
+)
+requireOrder(
+  buildBlock,
+  "- name: Sync app versions from tag",
+  "- name: Setup pnpm",
+  "Version sync must run before pnpm setup in the build job."
 )
 requireOrder(
   buildBlock,
