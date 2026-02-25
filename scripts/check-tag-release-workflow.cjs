@@ -66,6 +66,10 @@ requireSnippet(
   "Build command must use the CI Tauri config."
 )
 requireSnippet(
+  "run: node scripts/collect-release-package-files.cjs",
+  "Release package collection must use scripts/collect-release-package-files.cjs."
+)
+requireSnippet(
   "if-no-files-found: error",
   "Upload artifact steps must fail when no files are found."
 )

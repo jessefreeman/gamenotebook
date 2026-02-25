@@ -131,8 +131,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
           RELEASE_OS: ${{ matrix.platform.name }}
-        run: |
-          node -e "const fs=require('fs');const path=require('path');const root=path.join('src-tauri','target','release','bundle');const out='release-files';const version=process.env.RELEASE_VERSION;const os=process.env.RELEASE_OS;const include=(name)=>name.endsWith('.msi')||name.endsWith('.deb')||name.endsWith('.AppImage')||name.endsWith('.rpm');const classify=(name)=>{if(name.endsWith('.msi')) return {type:'msi',ext:'.msi'}; if(name.endsWith('.deb')) return {type:'deb',ext:'.deb'}; if(name.endsWith('.AppImage')) return {type:'appimage',ext:'.AppImage'}; if(name.endsWith('.rpm')) return {type:'rpm',ext:'.rpm'}; return null;}; const walk=(dir,acc)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const full=path.join(dir,entry.name);if(entry.isDirectory()){walk(full,acc);continue;}if(include(entry.name)){acc.push(full);}}}; if(!fs.existsSync(root)){throw new Error('Bundle directory not found: '+root);} fs.rmSync(out,{recursive:true,force:true}); fs.mkdirSync(out,{recursive:true}); const files=[]; walk(root,files); if(files.length===0){throw new Error('No release package files found under '+root);} for(const file of files){const info=classify(path.basename(file)); if(!info) continue; const dest=path.join(out,`GameNotebook_${version}_${os}_${info.type}${info.ext}`); fs.copyFileSync(file,dest);} console.log(fs.readdirSync(out).join('\\n'));"
+        run: node scripts/collect-release-package-files.cjs
 
       - name: Add Windows standalone exe
         if: matrix.platform.name == 'windows'

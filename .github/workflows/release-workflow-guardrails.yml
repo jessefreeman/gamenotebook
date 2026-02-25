@@ -5,12 +5,14 @@ on:
     paths:
       - ".github/workflows/tag-release-builds.yml"
       - "scripts/check-tag-release-workflow.cjs"
+      - "scripts/collect-release-package-files.cjs"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/tag-release-builds.yml"
       - "scripts/check-tag-release-workflow.cjs"
+      - "scripts/collect-release-package-files.cjs"
 
 permissions:
   contents: read
