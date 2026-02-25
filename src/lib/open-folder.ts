@@ -1,5 +1,6 @@
 import { dialog } from "@tauri-apps/api"
 import { useNavigate } from "@solidjs/router"
+import { actions } from "../store"
 
 export const useOpenFolderDialog = () => {
   const goto = useNavigate()
@@ -11,7 +12,8 @@ export const useOpenFolderDialog = () => {
     })
 
     if (typeof folder === "string") {
-      goto(`/scripts?${new URLSearchParams({ folder }).toString()}`)
+      await actions.loadFolder(folder)
+      goto("/scripts")
     }
   }
 

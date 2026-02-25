@@ -201,6 +201,125 @@ const emitArgs = (...parts: string[]): string => trimTrailingEmpty(parts).join("
 const normalizeJumpTarget = (value: string): string =>
   value.trim().replace(/^#\s*/, "")
 
+const toBasicStringLiteral = (value: string): string =>
+  `"${value.replace(/"/g, "\"\"")}"`
+
+const parseBasicStringLiteral = (value: string): string | null => {
+  const trimmed = value.trim()
+  if (trimmed.length < 2) return null
+  if (!trimmed.startsWith('"') || !trimmed.endsWith('"')) return null
+
+  let unescaped = ""
+
+  for (let index = 1; index < trimmed.length - 1; index += 1) {
+    const char = trimmed[index]
+    if (char === '"') {
+      if (trimmed[index + 1] === '"') {
+        unescaped += '"'
+        index += 1
+        continue
+      }
+      return null
+    }
+    unescaped += char
+  }
+
+  return unescaped
+}
+
+const parsePrintSegments = (tail: string) => {
+  const segments: { expression: string; separator: ";" | "," | null }[] = []
+  let depth = 0
+  let inString = false
+  let start = 0
+
+  for (let index = 0; index < tail.length; index += 1) {
+    const char = tail[index]
+
+    if (char === '"') {
+      if (inString && tail[index + 1] === '"') {
+        index += 1
+        continue
+      }
+      inString = !inString
+      continue
+    }
+
+    if (inString) continue
+    if (char === "(") {
+      depth += 1
+      continue
+    }
+    if (char === ")") {
+      depth = Math.max(0, depth - 1)
+      continue
+    }
+
+    if (depth === 0 && (char === ";" || char === ",")) {
+      segments.push({
+        expression: tail.slice(start, index),
+        separator: char,
+      })
+      start = index + 1
+    }
+  }
+
+  const trailingExpression = tail.slice(start)
+  if (trailingExpression.length > 0 || segments.length === 0) {
+    segments.push({
+      expression: trailingExpression,
+      separator: null,
+    })
+  }
+
+  return segments
+}
+
+const looksLikeBasicExpression = (value: string): boolean => {
+  const trimmed = value.trim()
+  if (!trimmed) return false
+
+  if (trimmed.includes('"')) return true
+  if (/[$()#+\-*/^<>=]/.test(trimmed)) return true
+  if (/^\d+(\.\d+)?$/.test(trimmed)) return true
+  if (/^[A-Z][A-Z0-9_]*\$$/i.test(trimmed)) return true
+  if (/^[A-Z][A-Z0-9_]*$/i.test(trimmed) && trimmed.length <= 2) return true
+
+  return false
+}
+
+const parsePrintValueForVisual = (value: string): string => {
+  return parsePrintSegments(value)
+    .map(({ expression, separator }) => {
+      const parsed = parseBasicStringLiteral(expression)
+      return `${parsed ?? expression}${separator ?? ""}`
+    })
+    .join("")
+}
+
+const emitPrintValueForSource = (value: string): string => {
+  if (!value.trim()) return ""
+
+  return parsePrintSegments(value)
+    .map(({ expression, separator }) => {
+      const trimmedExpression = expression.trim()
+      if (!trimmedExpression) {
+        return separator ?? ""
+      }
+
+      let emittedExpression = trimmedExpression
+      if (
+        parseBasicStringLiteral(trimmedExpression) === null &&
+        !looksLikeBasicExpression(trimmedExpression)
+      ) {
+        emittedExpression = toBasicStringLiteral(trimmedExpression)
+      }
+
+      return `${emittedExpression}${separator ?? ""}`
+    })
+    .join("")
+}
+
 export const parseBasicStatementToVisual = (
   statement: string
 ): BasicVisualStatement => {
@@ -255,7 +374,7 @@ export const parseBasicStatementToVisual = (
 
   const printTail = takeKeyword(trimmed, "PRINT")
   if (printTail !== null) {
-    return makeStatement("print", { value: printTail })
+    return makeStatement("print", { value: parsePrintValueForVisual(printTail) })
   }
 
   const inputTail = takeKeyword(trimmed, "INPUT")
@@ -437,7 +556,7 @@ export const emitBasicStatementFromVisual = (
   }
 
   if (statement.kind === "print") {
-    const value = statement.fields.value ?? ""
+    const value = emitPrintValueForSource(statement.fields.value ?? "")
     return value.trim().length > 0 ? `PRINT ${value}` : "PRINT"
   }
 

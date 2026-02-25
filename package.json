@@ -1,7 +1,7 @@
 {
   "name": "gamenotebook",
   "private": true,
-  "version": "0.2.3",
+  "version": "0.2.7",
   "packageManager": "pnpm@7.33.7",
   "scripts": {
     "dev": "vite",

@@ -17,7 +17,7 @@ import {
   type BasicCommandEntry,
 } from "../basic/command-templates"
 import { useOpenFolderDialog } from "../lib/open-folder"
-import { state } from "../store"
+import { actions, state } from "../store"
 
 const Modal = (props: { children: JSX.Element; close: () => void }) => {
   let modal: HTMLDivElement | undefined
@@ -303,9 +303,7 @@ export const FolderHistoryModal = (props: {
           icon: "i-bi:folder",
           text: folder,
           onClick() {
-            goto(
-              `/scripts?${new URLSearchParams({ folder: folder }).toString()}`
-            )
+            void actions.loadFolder(folder).then(() => goto("/scripts"))
             props.setOpen(false)
           },
         }
@@ -315,7 +313,7 @@ export const FolderHistoryModal = (props: {
           icon: "i-bi:folder-plus",
           text: "Open another folder",
           onClick() {
-            openAnotherFolder()
+            void openAnotherFolder()
             props.setOpen(false)
           },
         },

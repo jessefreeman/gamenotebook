@@ -12,8 +12,14 @@ export interface Snippet {
   deletedAt?: string
 }
 
+export type StorageMode = "local" | "folder"
+export type DefaultEditor = "code" | "build"
+
 interface AppData {
   folders: string[]
+  storageMode: StorageMode
+  storageFolder: string | null
+  defaultEditor: DefaultEditor
 }
 
 interface SnippetIndexData {
@@ -21,19 +27,28 @@ interface SnippetIndexData {
 }
 
 const SNIPPET_INDEX_FILENAME = "snippet-index.json"
+const LOCAL_STORAGE_INDEX_KEY = "__local__"
+const LOCAL_SNIPPETS_DIR = "snippets"
+
+interface StorageTarget {
+  mode: StorageMode
+  indexKey: string
+  folder?: string
+}
 
 const [state, setState] = createStore<{
   ready: boolean
   app: AppData
-  folder: string | null
   snippets: Snippet[]
   isMac: boolean
 }>({
   ready: false,
   app: {
     folders: [],
+    storageMode: "local",
+    storageFolder: null,
+    defaultEditor: "code",
   },
-  folder: null,
   snippets: [],
   isMac: /macintosh/i.test(navigator.userAgent),
 })
@@ -49,9 +64,54 @@ const writeAppJson = async (appData: AppData) => {
   })
 }
 
-const pathExists = async (path: string, baseDir?: BaseDirectory) => {
-  const exists: boolean = await fs.exists(path, { dir: baseDir })
+const getAppDataSnapshot = (): AppData => {
+  return {
+    folders: [...state.app.folders],
+    storageMode: state.app.storageMode,
+    storageFolder: state.app.storageFolder,
+    defaultEditor: state.app.defaultEditor,
+  }
+}
+
+const persistAppJson = async () => {
+  await writeAppJson(getAppDataSnapshot())
+}
+
+const pathExists = async (targetPath: string, baseDir?: BaseDirectory) => {
+  const exists: boolean = await fs.exists(targetPath, { dir: baseDir })
   return exists
+}
+
+const parseJson = <T>(text: string, fallback: T): T => {
+  try {
+    return JSON.parse(text) as T
+  } catch (error) {
+    console.error(error)
+    return fallback
+  }
+}
+
+const getActiveStorageTarget = (): StorageTarget | null => {
+  if (state.app.storageMode === "local") {
+    return { mode: "local", indexKey: LOCAL_STORAGE_INDEX_KEY }
+  }
+
+  if (!state.app.storageFolder) {
+    return null
+  }
+
+  return {
+    mode: "folder",
+    indexKey: state.app.storageFolder,
+    folder: state.app.storageFolder,
+  }
+}
+
+const ensureLocalSnippetsDir = async () => {
+  await fs.createDir(LOCAL_SNIPPETS_DIR, {
+    dir: BaseDirectory.App,
+    recursive: true,
+  })
 }
 
 const formatSnippetNameFromId = (id: string) => {
@@ -117,12 +177,7 @@ const loadSnippetIndex = async (): Promise<SnippetIndexData> => {
     .readTextFile(SNIPPET_INDEX_FILENAME, { dir: BaseDirectory.App })
     .catch(() => "{}")
 
-  let parsed: unknown = {}
-  try {
-    parsed = JSON.parse(text)
-  } catch (error) {
-    console.error(error)
-  }
+  const parsed = parseJson<unknown>(text, {})
 
   const folders: Record<string, Snippet[]> = {}
   const sourceFolders =
@@ -147,19 +202,30 @@ const writeSnippetIndex = async (index: SnippetIndexData) => {
   })
 }
 
-const getStoredSnippetsForFolder = async (folder: string): Promise<Snippet[]> => {
+const getStoredSnippetsForStorage = async (
+  folder: string
+): Promise<Snippet[]> => {
   const index = await loadSnippetIndex()
   return normalizeSnippets(index.folders[folder])
 }
 
-const setStoredSnippetsForFolder = async (folder: string, snippets: Snippet[]) => {
+const setStoredSnippetsForStorage = async (
+  folder: string,
+  snippets: Snippet[]
+) => {
   const index = await loadSnippetIndex()
   index.folders[folder] = snippets
   await writeSnippetIndex(index)
 }
 
-const listSnippetFileIds = async (folder: string): Promise<string[]> => {
-  const entries = await fs.readDir(folder).catch((error) => {
+const listSnippetFileIds = async (target: StorageTarget): Promise<string[]> => {
+  const entries = await (async () => {
+    if (target.mode === "local") {
+      await ensureLocalSnippetsDir()
+      return fs.readDir(LOCAL_SNIPPETS_DIR, { dir: BaseDirectory.App })
+    }
+    return fs.readDir(target.folder!)
+  })().catch((error) => {
     console.error(error)
     return []
   })
@@ -172,6 +238,37 @@ const listSnippetFileIds = async (folder: string): Promise<string[]> => {
   return [...new Set(ids)].sort((a, b) => a.localeCompare(b))
 }
 
+const readSnippetFile = async (target: StorageTarget, id: string) => {
+  if (target.mode === "local") {
+    return fs.readTextFile(`${LOCAL_SNIPPETS_DIR}/${id}`, {
+      dir: BaseDirectory.App,
+    })
+  }
+
+  return fs.readTextFile(await path.join(target.folder!, id))
+}
+
+const writeSnippetFile = async (target: StorageTarget, id: string, content: string) => {
+  if (target.mode === "local") {
+    await ensureLocalSnippetsDir()
+    await fs.writeTextFile(`${LOCAL_SNIPPETS_DIR}/${id}`, content, {
+      dir: BaseDirectory.App,
+    })
+    return
+  }
+
+  await fs.writeTextFile(await path.join(target.folder!, id), content)
+}
+
+const deleteSnippetFile = async (target: StorageTarget, id: string) => {
+  if (target.mode === "local") {
+    await fs.removeFile(`${LOCAL_SNIPPETS_DIR}/${id}`, { dir: BaseDirectory.App })
+    return
+  }
+
+  await fs.removeFile(await path.join(target.folder!, id))
+}
+
 const reconcileSnippetsWithFiles = (snippets: Snippet[], fileIds: string[]) => {
   const snippetsById = new Map(snippets.map((snippet) => [snippet.id, snippet]))
 
@@ -181,20 +278,32 @@ const reconcileSnippetsWithFiles = (snippets: Snippet[], fileIds: string[]) => {
   })
 }
 
-const loadSnippetsForFolder = async (folder: string): Promise<Snippet[]> => {
-  const storedSnippets = await getStoredSnippetsForFolder(folder)
-  const fileIds = await listSnippetFileIds(folder)
+const loadSnippetsForTarget = async (target: StorageTarget): Promise<Snippet[]> => {
+  const storedSnippets = await getStoredSnippetsForStorage(target.indexKey)
+  const fileIds = await listSnippetFileIds(target)
   const reconciledSnippets = reconcileSnippetsWithFiles(storedSnippets, fileIds)
 
   if (JSON.stringify(storedSnippets) !== JSON.stringify(reconciledSnippets)) {
-    await setStoredSnippetsForFolder(folder, reconciledSnippets)
+    await setStoredSnippetsForStorage(target.indexKey, reconciledSnippets)
   }
 
   return reconciledSnippets
 }
 
-const persistSnippets = async (folder: string, snippets: Snippet[]) => {
-  await setStoredSnippetsForFolder(folder, snippets)
+const persistSnippets = async (target: StorageTarget, snippets: Snippet[]) => {
+  await setStoredSnippetsForStorage(target.indexKey, snippets)
+}
+
+const isSameStringArray = (left: string[], right: string[]) => {
+  if (left.length !== right.length) return false
+  return left.every((value, index) => value === right[index])
+}
+
+const withFolderFirst = (folder: string) => {
+  if (state.app.folders.includes(folder)) {
+    return [folder, ...state.app.folders.filter((item) => item !== folder)]
+  }
+  return [folder, ...state.app.folders.slice(0, 10)]
 }
 
 export const actions = {
@@ -205,25 +314,109 @@ export const actions = {
         console.error(error)
         return "{}"
       })
-    const appData: Partial<AppData> = JSON.parse(text)
+    const appData = parseJson<Partial<AppData>>(text, {})
 
-    if (appData.folders) {
-      setState("app", "folders", appData.folders)
+    const folders = Array.isArray(appData.folders)
+      ? appData.folders.filter((folder) => typeof folder === "string")
+      : []
+    let storageMode: StorageMode =
+      appData.storageMode === "folder" ? "folder" : "local"
+    let storageFolder =
+      typeof appData.storageFolder === "string" ? appData.storageFolder : null
+    const defaultEditor: DefaultEditor =
+      appData.defaultEditor === "build" ? "build" : "code"
+
+    setState("app", "folders", folders)
+    setState("app", "storageMode", storageMode)
+    setState("app", "storageFolder", storageFolder)
+    setState("app", "defaultEditor", defaultEditor)
+
+    let shouldPersist = appData.storageMode !== "local" && appData.storageMode !== "folder"
+    if (appData.defaultEditor !== "code" && appData.defaultEditor !== "build") {
+      shouldPersist = true
     }
+
+    if (storageMode === "folder") {
+      if (!storageFolder) {
+        storageMode = "local"
+        setState("app", "storageMode", "local")
+        shouldPersist = true
+      } else if (!(await pathExists(storageFolder))) {
+        storageMode = "local"
+        storageFolder = null
+        setState("app", "storageMode", "local")
+        setState("app", "storageFolder", null)
+        setState(
+          "app",
+          "folders",
+          state.app.folders.filter((folder) => folder !== appData.storageFolder)
+        )
+        shouldPersist = true
+      }
+    }
+
+    if (shouldPersist) {
+      await persistAppJson()
+    }
+
+    await actions.loadActiveStorage()
     setState("ready", true)
   },
 
-  setFolder: (folder: string | null) => {
-    setState("folder", folder)
+  removeFolderFromHistory: async (folder: string) => {
+    const nextFolders = state.app.folders.filter((f) => f !== folder)
+    if (isSameStringArray(nextFolders, state.app.folders)) return
+
+    setState("app", "folders", nextFolders)
+    await persistAppJson()
   },
 
-  removeFolderFromHistory: async (folder: string) => {
-    setState(
-      "app",
-      "folders",
-      state.app.folders.filter((f) => f !== folder)
-    )
-    await writeAppJson(state.app)
+  setStorageMode: async (mode: StorageMode) => {
+    if (state.app.storageMode === mode) return
+
+    setState("app", "storageMode", mode)
+    await persistAppJson()
+    await actions.loadActiveStorage()
+  },
+
+  setDefaultEditor: async (mode: DefaultEditor) => {
+    if (state.app.defaultEditor === mode) return
+
+    setState("app", "defaultEditor", mode)
+    await persistAppJson()
+  },
+
+  loadActiveStorage: async () => {
+    const target = getActiveStorageTarget()
+    if (!target) {
+      if (state.snippets.length > 0) {
+        setState("snippets", [])
+      }
+      return
+    }
+
+    if (target.mode === "folder" && !(await pathExists(target.folder!))) {
+      await actions.removeFolderFromHistory(target.folder!)
+      setState("app", "storageMode", "local")
+      setState("app", "storageFolder", null)
+      setState("snippets", [])
+      await persistAppJson()
+      await dialog.message("Folder doesn't exist. Storage switched back to local.")
+      return
+    }
+
+    const snippets = await loadSnippetsForTarget(target)
+    if (JSON.stringify(state.snippets) !== JSON.stringify(snippets)) {
+      setState("snippets", snippets)
+    }
+
+    if (target.mode === "folder") {
+      const nextFolders = withFolderFirst(target.folder!)
+      if (!isSameStringArray(nextFolders, state.app.folders)) {
+        setState("app", "folders", nextFolders)
+        await persistAppJson()
+      }
+    }
   },
 
   loadFolder: async (folder: string) => {
@@ -235,31 +428,35 @@ export const actions = {
       return
     }
 
-    const snippets = await loadSnippetsForFolder(folder)
+    setState("app", "storageMode", "folder")
+    setState("app", "storageFolder", folder)
+
+    const target: StorageTarget = {
+      mode: "folder",
+      indexKey: folder,
+      folder,
+    }
+    const snippets = await loadSnippetsForTarget(target)
     if (JSON.stringify(state.snippets) !== JSON.stringify(snippets)) {
       setState("snippets", snippets)
     }
 
-    if (state.app.folders.includes(folder)) {
-      setState("app", "folders", [
-        folder,
-        ...state.app.folders.filter((f) => f !== folder),
-      ])
-    } else {
-      setState("app", "folders", [folder, ...state.app.folders.slice(0, 10)])
+    const nextFolders = withFolderFirst(folder)
+    if (!isSameStringArray(nextFolders, state.app.folders)) {
+      setState("app", "folders", nextFolders)
     }
 
-    await writeAppJson(state.app)
+    await persistAppJson()
   },
 
   createSnippet: async (snippet: Snippet, content: string) => {
-    if (!state.folder) return
+    const target = getActiveStorageTarget()
+    if (!target) return
 
-    const filepath = await path.join(state.folder, snippet.id)
-    await fs.writeTextFile(filepath, content)
+    await writeSnippetFile(target, snippet.id, content)
     const snippets = [...state.snippets, snippet]
     setState("snippets", snippets)
-    await persistSnippets(state.folder, snippets)
+    await persistSnippets(target, snippets)
   },
 
   getRandomId: () => {
@@ -267,8 +464,10 @@ export const actions = {
   },
 
   readSnippetContent: async (id: string) => {
-    if (!state.folder) return ""
-    const text = await fs.readTextFile(await path.join(state.folder, id))
+    const target = getActiveStorageTarget()
+    if (!target) return ""
+
+    const text = await readSnippetFile(target, id)
     return text
   },
 
@@ -277,7 +476,8 @@ export const actions = {
     key: K,
     value: V
   ) => {
-    if (!state.folder) return
+    const target = getActiveStorageTarget()
+    if (!target) return
 
     const snippets = state.snippets.map((snippet) => {
       if (snippet.id === id) {
@@ -287,18 +487,20 @@ export const actions = {
     })
 
     setState("snippets", snippets)
-    await persistSnippets(state.folder, snippets)
+    await persistSnippets(target, snippets)
   },
 
   updateSnippetContent: async (id: string, content: string) => {
-    if (!state.folder) return
+    const target = getActiveStorageTarget()
+    if (!target) return
 
-    await fs.writeTextFile(await path.join(state.folder, id), content)
+    await writeSnippetFile(target, id, content)
     await actions.updateSnippet(id, "updatedAt", new Date().toISOString())
   },
 
   moveSnippetsToTrash: async (ids: string[], restore = false) => {
-    if (!state.folder) return
+    const target = getActiveStorageTarget()
+    if (!target) return
 
     const snippets = state.snippets.map((snippet) => {
       if (ids.includes(snippet.id)) {
@@ -311,20 +513,23 @@ export const actions = {
     })
 
     setState("snippets", snippets)
-    await persistSnippets(state.folder, snippets)
+    await persistSnippets(target, snippets)
   },
 
   deleteSnippetForever: async (id: string) => {
-    if (!state.folder) return
+    const target = getActiveStorageTarget()
+    if (!target) return
 
     const snippets = state.snippets.filter((snippet) => id !== snippet.id)
-    await fs.removeFile(await path.join(state.folder, id))
+    await deleteSnippetFile(target, id)
     setState("snippets", snippets)
-    await persistSnippets(state.folder, snippets)
+    await persistSnippets(target, snippets)
   },
 
   emptyTrash: async () => {
-    if (!state.folder) return
+    const target = getActiveStorageTarget()
+    if (!target) return
+
     const toDelete: string[] = []
     const snippets = state.snippets.filter((snippet) => {
       if (snippet.deletedAt) {
@@ -332,20 +537,18 @@ export const actions = {
       }
       return !snippet.deletedAt
     })
+
     await Promise.all(
       toDelete.map(async (id) => {
-        return fs.removeFile(await path.join(state.folder!, id))
+        return deleteSnippetFile(target, id)
       })
     )
+
     setState("snippets", snippets)
-    await persistSnippets(state.folder, snippets)
+    await persistSnippets(target, snippets)
   },
 
   getFolderHistory: async () => {
-    const text = await fs
-      .readTextFile("folders.json", { dir: BaseDirectory.App })
-      .catch(() => "[]")
-    const folders: string[] = JSON.parse(text)
-    return folders
+    return [...state.app.folders]
   },
 }
