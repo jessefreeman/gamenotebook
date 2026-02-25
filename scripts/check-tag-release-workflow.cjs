@@ -10,11 +10,21 @@ const workflowPath = path.join(
   "tag-release-builds.yml"
 )
 const workflow = fs.readFileSync(workflowPath, "utf8")
+const packageJsonPath = path.join(process.cwd(), "package.json")
+const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
+const scripts = packageJson.scripts || {}
 
 const failures = []
 
 const requireSnippet = (snippet, message) => {
   if (!workflow.includes(snippet)) {
+    failures.push(message)
+  }
+}
+
+const requireScript = (name, expectedSnippet, message) => {
+  const script = scripts[name]
+  if (!script || !script.includes(expectedSnippet)) {
     failures.push(message)
   }
 }
@@ -70,17 +80,20 @@ requireSnippet(
   "Setup Node.js must include cache-dependency-path: pnpm-lock.yaml."
 )
 requireSnippet(
-  "run: pnpm exec tauri build --config src-tauri/tauri.conf.ci.json",
-  "Build command must use the CI Tauri config."
+  "run: pnpm build:release -- --platform ${{ matrix.platform.name }}",
+  "Build step must call the local release command with the matrix platform."
 )
 requireSnippet(
-  "run: node scripts/collect-release-package-files.cjs",
-  "Release package collection must use scripts/collect-release-package-files.cjs."
+  "Build and package release artifacts",
+  "Missing build-and-package step in the build job."
 )
 requireSnippet(
   "if-no-files-found: error",
   "Upload artifact steps must fail when no files are found."
 )
+if (workflow.includes("collect-release-package-files.cjs")) {
+  failures.push("Workflow must not call scripts/collect-release-package-files.cjs directly.")
+}
 requireSnippet(
   "release:\n    name: Publish GitHub release",
   "Missing release publish job."
@@ -93,6 +106,27 @@ requireSnippet(
 requireSnippet(
   "files: release-artifacts/*",
   "Release job must publish artifacts downloaded from build jobs."
+)
+
+requireScript(
+  "build:release",
+  "scripts/build-release-artifacts.cjs",
+  "package.json must define build:release using scripts/build-release-artifacts.cjs."
+)
+requireScript(
+  "build:release:macos",
+  "--platform macos",
+  "package.json must define build:release:macos with --platform macos."
+)
+requireScript(
+  "build:release:windows",
+  "--platform windows",
+  "package.json must define build:release:windows with --platform windows."
+)
+requireScript(
+  "build:release:linux",
+  "--platform linux",
+  "package.json must define build:release:linux with --platform linux."
 )
 
 if (failures.length > 0) {

@@ -106,70 +106,10 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Create CI Tauri config
-        run: |
-          node -e "const fs=require('fs');const path='src-tauri/tauri.conf.json';const cfg=JSON.parse(fs.readFileSync(path,'utf8'));if(cfg?.tauri?.updater){cfg.tauri.updater.active=false;}fs.writeFileSync('src-tauri/tauri.conf.ci.json', JSON.stringify(cfg, null, 2));"
-
-      - name: Build Tauri bundles
-        run: pnpm exec tauri build --config src-tauri/tauri.conf.ci.json
-
-      - name: Prepare unsigned mac dmg
-        if: matrix.platform.name == 'macos'
-        shell: bash
+      - name: Build and package release artifacts
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
-        run: |
-          bundle_dir="src-tauri/target/release/bundle/macos"
-          app_path=$(find "$bundle_dir" -maxdepth 1 -type d -name "*.app" | head -n 1)
-          if [ -z "$app_path" ]; then
-            echo "No .app bundle found in $bundle_dir"
-            exit 1
-          fi
-
-          # Ad-hoc sign to keep bundle signature valid without Apple certs.
-          codesign --force --deep --sign - "$app_path"
-
-          mkdir -p release-files
-          stage_dir=$(mktemp -d)
-          cp -R "$app_path" "$stage_dir/"
-          archive="release-files/GameNotebook_${RELEASE_VERSION}_macos_dmg.dmg"
-          hdiutil create -volname "GameNotebook" -srcfolder "$stage_dir" -ov -format UDZO "$archive"
-          rm -rf "$stage_dir"
-
-      - name: Collect release package files
-        if: matrix.platform.name != 'macos'
-        shell: bash
-        env:
-          RELEASE_VERSION: ${{ github.ref_name }}
-          RELEASE_OS: ${{ matrix.platform.name }}
-        run: node scripts/collect-release-package-files.cjs
-
-      - name: Add Windows standalone exe
-        if: matrix.platform.name == 'windows'
-        shell: pwsh
-        env:
-          RELEASE_VERSION: ${{ github.ref_name }}
-        run: |
-          $releaseDir = "release-files"
-          New-Item -Path $releaseDir -ItemType Directory -Force | Out-Null
-
-          $exeCandidates = @(
-            "src-tauri/target/release/gamenotebook.exe",
-            "src-tauri/target/release/GameNotebook.exe"
-          )
-          $exePath = $null
-          foreach ($candidate in $exeCandidates) {
-            if (Test-Path $candidate) {
-              $exePath = $candidate
-              break
-            }
-          }
-          if (-not $exePath) {
-            throw "Could not find built Windows executable in src-tauri/target/release"
-          }
-
-          $standaloneExe = Join-Path $releaseDir ("GameNotebook_${env:RELEASE_VERSION}_windows_standalone.exe")
-          Copy-Item $exePath $standaloneExe -Force
+        run: pnpm build:release -- --platform ${{ matrix.platform.name }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

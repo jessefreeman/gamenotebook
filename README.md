@@ -84,11 +84,38 @@ How this behaves:
 
 1. Keep `pnpm dev:live` running in one terminal.
 2. Edit files under `src/` and the app window reloads automatically.
-3. Only run `pnpm build:mac:app` when you need a distributable `.app` artifact.
+3. Run release packaging commands only when you need installable artifacts.
 
 If `1420` is already in use, stop the existing dev server/instance first, then rerun `pnpm dev:live`.
 
-### Versioned macOS `.app` Build (No zip/dmg)
+### Release Builds (Local-First)
+
+Default behavior auto-detects the host platform:
+
+```bash
+pnpm build:release
+```
+
+Manual platform commands:
+
+```bash
+pnpm build:release:macos
+pnpm build:release:windows
+pnpm build:release:linux
+```
+
+These platform-specific commands are intended to run on that same OS (or with explicit cross-build tooling and `ALLOW_CROSS_PLATFORM=1`).
+
+Output layout:
+
+1. `release-files/GameNotebook_<version>_macos.dmg` (includes `Applications` symlink for drag-to-install)
+2. `release-files/GameNotebook_<version>_windows_standalone.exe`
+3. `release-files/GameNotebook_<version>_windows_installer.msi` (and NSIS `.exe` when generated)
+4. `release-files/GameNotebook_<version>_linux.*` (`.AppImage`, `.deb`, or `.rpm` depending on host/tooling)
+
+GitHub Actions uses the same local build command per OS (`pnpm build:release -- --platform <os>`), then uploads `release-files/*` to the tag release.
+
+### Versioned macOS `.app` Build (Fast Local App Bundle)
 
 ```bash
 pnpm build:mac:app

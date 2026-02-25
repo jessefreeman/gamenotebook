@@ -7,7 +7,7 @@
   },
   "package": {
     "productName": "GameNotebook",
-    "version": "0.0.7"
+    "version": "0.2.1"
   },
   "tauri": {
     "allowlist": {

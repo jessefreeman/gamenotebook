@@ -1,7 +1,7 @@
 {
   "name": "gamenotebook",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.2.1",
   "packageManager": "pnpm@7.33.7",
   "scripts": {
     "dev": "vite",
@@ -13,7 +13,11 @@
     "dev:live": "CARGO_TARGET_DIR=/tmp/gamenotebook-dev-target npx -y pnpm@7 tauri dev",
     "dev:tauri": "pnpm dev:live",
     "build:mac:app": "node -r esbuild-register ./scripts/build-mac-app.ts",
-    "release": "node -r esbuild-register ./scripts/release.ts"
+    "build:release": "node ./scripts/build-release-artifacts.cjs",
+    "build:release:macos": "pnpm build:release -- --platform macos",
+    "build:release:windows": "pnpm build:release -- --platform windows",
+    "build:release:linux": "pnpm build:release -- --platform linux",
+    "release": "pnpm build:release"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.3.0",

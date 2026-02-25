@@ -12,7 +12,10 @@ dist
 dist-ssr
 *.local
 artifacts
+artifacts/macos/builds/
 src-tauri/target
+builds/
+release-files/
 
 # Editor directories and files
 .vscode/*
