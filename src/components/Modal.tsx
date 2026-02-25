@@ -17,7 +17,7 @@ import {
   type BasicCommandEntry,
 } from "../basic/command-templates"
 import { useOpenFolderDialog } from "../lib/open-folder"
-import { actions, type Snippet, state } from "../store"
+import { state } from "../store"
 
 const Modal = (props: { children: JSX.Element; close: () => void }) => {
   let modal: HTMLDivElement | undefined
@@ -304,7 +304,7 @@ export const FolderHistoryModal = (props: {
           text: folder,
           onClick() {
             goto(
-              `/snippets?${new URLSearchParams({ folder: folder }).toString()}`
+              `/scripts?${new URLSearchParams({ folder: folder }).toString()}`
             )
             props.setOpen(false)
           },
@@ -331,85 +331,6 @@ export const FolderHistoryModal = (props: {
         items={items()}
         close={() => props.setOpen(false)}
       ></PromptModal>
-    </Show>
-  )
-}
-
-export const VSCodeSnippetSettingsModal = (props: {
-  snippetId: string | undefined
-  close: () => void
-}) => {
-  const closeModal = () => {
-    props.close()
-  }
-
-  const [getPrefix, setPrefix] = createSignal("")
-  const getSnippet = createMemo(() =>
-    props.snippetId
-      ? state.snippets.find((s) => s.id === props.snippetId)
-      : undefined
-  )
-
-  const save = async () => {
-    const snippet = getSnippet()
-
-    if (!snippet) return
-
-    await actions.updateSnippet(snippet.id, "vscodeSnippet", {
-      ...snippet.vscodeSnippet,
-      prefix: getPrefix(),
-    })
-  }
-
-  const onSubmit = async (e: SubmitEvent) => {
-    e.preventDefault()
-    await save()
-    closeModal()
-  }
-
-  createEffect(() => {
-    setPrefix(getSnippet()?.vscodeSnippet?.prefix || "")
-  })
-
-  return (
-    <Show when={props.snippetId}>
-      <Modal close={closeModal}>
-        <div class="p-5">
-          <div class="text-lg font-medium mb-5">
-            Make this snippet compatible with{" "}
-            <a
-              href="https://code.visualstudio.com/docs/editor/userdefinedsnippets"
-              target="_blank"
-              class="text-blue-500"
-            >
-              VSCode snippet
-            </a>
-          </div>
-          <form onSubmit={onSubmit}>
-            <label>
-              <span class="block mb-1 font-medium">Prefix</span>
-              <div class="text-xs text-zinc-400 mb-2">
-                One or more trigger words that display the snippet in
-                IntelliSense. Separated by comma.
-              </div>
-              <input
-                spellcheck={false}
-                class="input w-full"
-                value={getPrefix()}
-                onInput={(e) => setPrefix(e.currentTarget.value)}
-              />
-            </label>
-            <div class="mt-5 space-x-2">
-              <button
-                type="submit"
-                class="cursor border bg-zinc-50 dark:bg-zinc-700 active:border-zinc-200 active:bg-zinc-200 dark:active:border-zinc-600 dark:active:bg-zinc-600 rounded-lg px-3 inline-flex h-8 items-center"
-              >
-                Save
-              </button>
-            </div>
-          </form>
-        </div>
-      </Modal>
     </Show>
   )
 }

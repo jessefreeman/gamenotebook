@@ -179,6 +179,7 @@ class LineNumberField extends Blockly.FieldLabelSerializable {
   }
 
   protected override render_(): void {
+    super.render_()
     this.updateSize_(12)
     this.positionBorderRect_()
   }

@@ -11,7 +11,6 @@ import {
   Show,
 } from "solid-js"
 import { confirm } from "@tauri-apps/api/dialog"
-import { WebviewWindow } from "@tauri-apps/api/window"
 import { Editor } from "../components/Editor"
 import {
   BasicBlocklyEditor,
@@ -22,20 +21,16 @@ import {
   BasicCommandModal,
   FolderHistoryModal,
   LineJumpModal,
-  VSCodeSnippetSettingsModal,
 } from "../components/Modal"
 import { languages } from "../lib/languages"
 import { debounce } from "../lib/utils"
 import { actions, state } from "../store"
 import { Button } from "../components/Button"
 import { timeago } from "../lib/date"
-import { tooltip } from "../lib/tooltip"
 import { path } from "@tauri-apps/api"
-import { useFormControl } from "../lib/use-form-control"
-import {
-  BASIC_RUNNER_STORAGE_KEY,
-  encodeRunnerPayload,
-} from "../basic/runner-payload"
+import { BasicRunnerCanvas } from "../components/BasicRunnerCanvas"
+
+type SnippetMainMode = "play" | "code" | "build"
 
 export const Snippets = () => {
   const goto = useNavigate()
@@ -46,34 +41,45 @@ export const Snippets = () => {
   const [getOpenLineJumpModal, setOpenLineJumpModal] = createSignal(false)
   const [getOpenFolderHistoryModal, setOpenFolderHistoryModal] =
     createSignal(false)
-  const [getSearchType, setSearchType] = createSignal<
-    null | "non-trash" | "trash"
-  >(null)
+  const [getSearchType, setSearchType] = createSignal<"non-trash" | "trash">(
+    "non-trash"
+  )
   const [getSearchKeyword, setSearchKeyword] = createSignal<string>("")
+  const [getIsSearchFocused, setIsSearchFocused] = createSignal(false)
   const [getIsContentDirty, setIsContentDirty] = createSignal(false)
   const [getIsSavingContent, setIsSavingContent] = createSignal(false)
   const [getSelectedSnippetIds, setSelectedSnippetIds] = createSignal<string[]>(
     []
   )
-  const [getOpenVSCodeSnippetSettingsModal, setOpenVSCodeSnippetSettingsModal] =
-    createSignal<string | undefined>()
-  const [getIsVisualMode, setIsVisualMode] = createSignal(false)
-  const [getPendingVisualInsert, setPendingVisualInsert] =
+  const [getInlineRenameSnippetId, setInlineRenameSnippetId] = createSignal<
+    string | null
+  >(null)
+  const [getInlineRenameValue, setInlineRenameValue] = createSignal("")
+  const [getDraggedSnippetId, setDraggedSnippetId] = createSignal<string | null>(
+    null
+  )
+  const [getTrashDropSnippetId, setTrashDropSnippetId] = createSignal<
+    string | null
+  >(null)
+  const [getIsTrashDropTarget, setIsTrashDropTarget] = createSignal(false)
+  const [getMainMode, setMainMode] = createSignal<SnippetMainMode>("code")
+  const [getPlayRunVersion, setPlayRunVersion] = createSignal(0)
+  const [getPendingBuildInsert, setPendingBuildInsert] =
     createSignal<BasicBlocklyPendingInsert | null>(null)
-  const [getPendingVisualJump, setPendingVisualJump] =
+  const [getPendingBuildJump, setPendingBuildJump] =
     createSignal<BasicBlocklyPendingJump | null>(null)
 
   let editorView: EditorView | undefined
   let searchInputEl: HTMLInputElement | undefined
+  let renameInputEl: HTMLInputElement | undefined
+  let trashButtonEl: HTMLButtonElement | undefined
+  let mainPaneEl: HTMLDivElement | undefined
+  let isSavingInlineRename = false
   let latestContentRevision = 0
-  let nextVisualInsertId = 0
-  let nextVisualJumpId = 0
-  const nameInputControl = useFormControl({
-    defaultValue: "",
-    async save(value) {
-      await actions.updateSnippet(snippet()!.id, "name", value)
-    },
-  })
+  let nextBuildInsertId = 0
+  let nextBuildJumpId = 0
+  let handledTrashDropForCurrentDrag = false
+  let suppressTrashButtonClick = false
 
   const snippets = createMemo(() => {
     const keyword = getSearchKeyword().toLowerCase()
@@ -139,6 +145,19 @@ export const Snippets = () => {
     return languageId === "basic" || languageId === "plaintext"
   })
 
+  const runShortcutLabel = createMemo(() =>
+    state.isMac ? "⌘ + Enter" : "Ctrl + Enter"
+  )
+
+  const isPlayMode = createMemo(() => getMainMode() === "play")
+  const isBuildMode = createMemo(() => getMainMode() === "build")
+
+  const runInPlayMode = () => {
+    if (!isBasicSnippet()) return
+    setMainMode("play")
+    setPlayRunVersion((version) => version + 1)
+  }
+
   const newSnippet = async () => {
     const d = new Date()
     const id = actions.getRandomId()
@@ -152,8 +171,215 @@ export const Snippets = () => {
       },
       ""
     )
-    setSearchType(null)
-    goto(`/snippets?${new URLSearchParams({ ...searchParams, id }).toString()}`)
+    setSearchType("non-trash")
+    setInlineRenameSnippetId(id)
+    setInlineRenameValue("Untitled")
+    goto(`/scripts?${new URLSearchParams({ ...searchParams, id }).toString()}`)
+  }
+
+  const openSettings = () => {
+    const params = new URLSearchParams()
+    if (searchParams.folder) {
+      params.set("folder", searchParams.folder)
+    }
+    const query = params.toString()
+    goto(query ? `/settings?${query}` : "/settings")
+  }
+
+  const startInlineRename = (
+    e: MouseEvent & { currentTarget: HTMLElement },
+    snippetId: string,
+    currentName: string
+  ) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setInlineRenameSnippetId(snippetId)
+    setInlineRenameValue(currentName)
+  }
+
+  const cancelInlineRename = () => {
+    setInlineRenameSnippetId(null)
+    setInlineRenameValue("")
+  }
+
+  const saveInlineRename = async (snippetId: string) => {
+    if (isSavingInlineRename) return
+    const targetSnippet = state.snippets.find((item) => item.id === snippetId)
+    if (!targetSnippet) {
+      cancelInlineRename()
+      return
+    }
+
+    isSavingInlineRename = true
+    try {
+      const trimmedName = getInlineRenameValue().trim()
+      const nextName = trimmedName || targetSnippet.name
+
+      if (nextName !== targetSnippet.name) {
+        await actions.updateSnippet(snippetId, "name", nextName)
+      }
+    } finally {
+      isSavingInlineRename = false
+      cancelInlineRename()
+    }
+  }
+
+  const resetTrashDragState = () => {
+    setDraggedSnippetId(null)
+    setTrashDropSnippetId(null)
+    setIsTrashDropTarget(false)
+  }
+
+  const armTrashButtonClickSuppression = () => {
+    suppressTrashButtonClick = true
+    window.setTimeout(() => {
+      suppressTrashButtonClick = false
+    }, 0)
+  }
+
+  const moveDraggedSnippetToTrash = async (draggedSnippetId: string) => {
+    const targetSnippet = state.snippets.find(
+      (snippet) => snippet.id === draggedSnippetId
+    )
+    if (!targetSnippet || targetSnippet.deletedAt) return
+
+    if (!(await confirm(`Are you sure you want to move this script to Trash?`))) {
+      return
+    }
+
+    await actions.moveSnippetsToTrash([draggedSnippetId])
+    setSelectedSnippetIds((ids) => ids.filter((id) => id !== draggedSnippetId))
+  }
+
+  const getDraggedSnippetIdFromEvent = (e: DragEvent) => {
+    const fromCustomData = e.dataTransfer?.getData(
+      "application/x-gamenotepad-script-id"
+    )
+    if (fromCustomData) return fromCustomData
+
+    const fromTextData = e.dataTransfer?.getData("text/plain")
+    if (fromTextData && state.snippets.some((snippet) => snippet.id === fromTextData)) {
+      return fromTextData
+    }
+
+    return getDraggedSnippetId()
+  }
+
+  const handleSnippetDragStart = (
+    e: DragEvent & { currentTarget: HTMLElement },
+    snippetId: string
+  ) => {
+    if (getInlineRenameSnippetId() === snippetId) {
+      e.preventDefault()
+      return
+    }
+
+    handledTrashDropForCurrentDrag = false
+    suppressTrashButtonClick = false
+    setTrashDropSnippetId(null)
+    setIsTrashDropTarget(false)
+    setDraggedSnippetId(snippetId)
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move"
+      e.dataTransfer.setData("application/x-gamenotepad-script-id", snippetId)
+      e.dataTransfer.setData("text/plain", snippetId)
+    }
+  }
+
+  const handleSnippetDragEnd = async (
+    e: DragEvent & { currentTarget: HTMLElement }
+  ) => {
+    try {
+      const dropTarget = document.elementFromPoint(e.clientX, e.clientY)
+      const releasedOverTrash =
+        !!trashButtonEl && !!dropTarget && trashButtonEl.contains(dropTarget)
+      const droppedOnTrash =
+        !handledTrashDropForCurrentDrag &&
+        (getIsTrashDropTarget() || releasedOverTrash)
+      const draggedSnippetId = getTrashDropSnippetId() || getDraggedSnippetId()
+
+      if (droppedOnTrash && draggedSnippetId) {
+        armTrashButtonClickSuppression()
+        await moveDraggedSnippetToTrash(draggedSnippetId)
+      }
+    } catch (error) {
+      console.error("Failed to move dragged script to Trash", error)
+    } finally {
+      handledTrashDropForCurrentDrag = false
+      resetTrashDragState()
+    }
+  }
+
+  const handleTrashDragOver = (e: DragEvent & { currentTarget: HTMLElement }) => {
+    const draggedSnippetId = getDraggedSnippetIdFromEvent(e)
+    if (!draggedSnippetId) {
+      setTrashDropSnippetId(null)
+      setIsTrashDropTarget(false)
+      return
+    }
+
+    const targetSnippet = state.snippets.find(
+      (snippet) => snippet.id === draggedSnippetId
+    )
+    if (!targetSnippet || targetSnippet.deletedAt) {
+      setTrashDropSnippetId(null)
+      setIsTrashDropTarget(false)
+      return
+    }
+
+    e.preventDefault()
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = "move"
+    }
+    setTrashDropSnippetId(draggedSnippetId)
+    setIsTrashDropTarget(true)
+  }
+
+  const handleTrashDragLeave = (
+    e: DragEvent & { currentTarget: HTMLElement }
+  ) => {
+    const nextTarget = e.relatedTarget as Node | null
+    if (nextTarget && e.currentTarget.contains(nextTarget)) return
+    setTrashDropSnippetId(null)
+    setIsTrashDropTarget(false)
+  }
+
+  const handleTrashDrop = async (e: DragEvent & { currentTarget: HTMLElement }) => {
+    e.preventDefault()
+    e.stopPropagation()
+    handledTrashDropForCurrentDrag = true
+    armTrashButtonClickSuppression()
+
+    try {
+      const draggedSnippetId =
+        getTrashDropSnippetId() || getDraggedSnippetIdFromEvent(e)
+      if (!draggedSnippetId) return
+
+      await moveDraggedSnippetToTrash(draggedSnippetId)
+    } catch (error) {
+      console.error("Failed to move dropped script to Trash", error)
+    } finally {
+      resetTrashDragState()
+    }
+  }
+
+  const toggleTrashFilter = () => {
+    if (getSearchType() === "trash") {
+      setSearchType("non-trash")
+      return
+    }
+    setSearchType("trash")
+  }
+
+  const handleTrashButtonClick = (
+    e: MouseEvent & { currentTarget: HTMLElement }
+  ) => {
+    if (suppressTrashButtonClick || getDraggedSnippetId()) {
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+    toggleTrashFilter()
   }
 
   const persistEditorChange = debounce(async (
@@ -194,13 +420,13 @@ export const Snippets = () => {
   }
 
   const insertBasicCommandSnippet = (snippetTemplate: string) => {
-    if (isBasicSnippet() && getIsVisualMode()) {
+    if (isBasicSnippet() && isBuildMode()) {
       const statement = expandSnippetTemplate(snippetTemplate).trim()
       if (!statement) return
 
-      nextVisualInsertId += 1
-      setPendingVisualInsert({
-        id: nextVisualInsertId,
+      nextBuildInsertId += 1
+      setPendingBuildInsert({
+        id: nextBuildInsertId,
         statement,
       })
       return
@@ -223,48 +449,17 @@ export const Snippets = () => {
     setOpenLineJumpModal(true)
   }
 
-  const moveSnippetToTrashOrRestore = async (id: string) => {
-    const snippet = state.snippets.find((snippet) => snippet.id === id)
-    if (!snippet) {
-      console.error("snippet not found")
-      return
-    }
-    if (snippet.deletedAt) {
-      if (
-        await confirm(
-          `Are you sure you want to restore this snippet from Trash?`
-        )
-      ) {
-        console.log(`restoring ${id}:${snippet.name} from trash`)
-        await actions.moveSnippetsToTrash([id], true)
-      }
-    } else {
-      if (await confirm(`Are you sure you want to move it to Trash?`)) {
-        console.log(`moving ${id}:${snippet.name} to trash`)
-        await actions.moveSnippetsToTrash([id])
-      }
-    }
-  }
-
   const moveSelectedSnippetsToTrashOrRestore = async () => {
     const restore = getSearchType() === "trash"
     if (
       await confirm(
         restore
-          ? `Are you sure you want to restore selected snippets from Trash`
-          : `Are you sure you want to move selected snippets to Trash?`
+          ? `Are you sure you want to restore selected scripts from Trash`
+          : `Are you sure you want to move selected scripts to Trash?`
       )
     ) {
       await actions.moveSnippetsToTrash(actualSelectedSnippetIds(), restore)
       setSelectedSnippetIds([])
-    }
-  }
-
-  const deleteForever = async (id: string) => {
-    if (
-      await confirm(`Are you sure you want to delete this snippet forever?`)
-    ) {
-      await actions.deleteSnippetForever(id)
     }
   }
 
@@ -278,40 +473,11 @@ export const Snippets = () => {
     }
   }
 
-  const openRunner = async () => {
-    const currentSnippet = snippet()
-    if (!currentSnippet) return
-
-    localStorage.setItem(
-      BASIC_RUNNER_STORAGE_KEY,
-      encodeRunnerPayload({
-        source: content(),
-        snippetName: currentSnippet.name,
-        timestamp: Date.now(),
-      })
-    )
-
-    const existing = WebviewWindow.getByLabel("basic-runner")
-    if (existing) {
-      await existing.setTitle(currentSnippet.name)
-      await existing.show()
-      await existing.setFocus()
-      return
-    }
-
-    const runnerWindow = new WebviewWindow("basic-runner", {
-      url: "/",
-      title: currentSnippet.name,
-      width: 920,
-      height: 760,
-      center: true,
-      resizable: true,
-      focus: true,
-    })
-
-    runnerWindow.once("tauri://error", (event) => {
-      console.error("Failed to create runner window", event)
-    })
+  const isRunShortcut = (event: KeyboardEvent) => {
+    if (event.key !== "Enter") return false
+    if (event.repeat) return false
+    if (event.shiftKey || event.altKey) return false
+    return state.isMac ? event.metaKey : event.ctrlKey
   }
 
   const jumpToBasicLine = (targetLineNumber: number) => {
@@ -319,10 +485,10 @@ export const Snippets = () => {
       return
     }
 
-    if (isBasicSnippet() && getIsVisualMode()) {
-      nextVisualJumpId += 1
-      setPendingVisualJump({
-        id: nextVisualJumpId,
+    if (isBasicSnippet() && isBuildMode()) {
+      nextBuildJumpId += 1
+      setPendingBuildJump({
+        id: nextBuildJumpId,
         lineNumber: targetLineNumber,
       })
       return
@@ -344,10 +510,53 @@ export const Snippets = () => {
     view.focus()
   }
 
+  const focusMainPane = () => {
+    if (editorView) {
+      editorView.focus()
+      return
+    }
+
+    const visualEditorEl = mainPaneEl?.querySelector(
+      ".basic-blockly-editor"
+    ) as HTMLElement | null
+    if (visualEditorEl) {
+      visualEditorEl.tabIndex = -1
+      visualEditorEl.focus()
+      return
+    }
+
+    const fallbackEl = mainPaneEl?.querySelector(
+      "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
+    ) as HTMLElement | null
+    fallbackEl?.focus()
+  }
+
   createEffect(() => {
     if (getSearchType()) {
       searchInputEl?.focus()
     }
+  })
+
+  createEffect(() => {
+    const onWindowKeyDown = (event: KeyboardEvent) => {
+      if (!isRunShortcut(event)) return
+      event.preventDefault()
+      event.stopPropagation()
+      runInPlayMode()
+    }
+
+    window.addEventListener("keydown", onWindowKeyDown, true)
+    onCleanup(() => {
+      window.removeEventListener("keydown", onWindowKeyDown, true)
+    })
+  })
+
+  createEffect(() => {
+    if (!getInlineRenameSnippetId()) return
+    window.setTimeout(() => {
+      renameInputEl?.focus()
+      renameInputEl?.select()
+    }, 0)
   })
 
   createEffect(
@@ -361,8 +570,8 @@ export const Snippets = () => {
   })
 
   createEffect(() => {
-    if (!isBasicSnippet() && getIsVisualMode()) {
-      setIsVisualMode(false)
+    if (!isBasicSnippet() && getMainMode() !== "code") {
+      setMainMode("code")
     }
   })
 
@@ -370,10 +579,21 @@ export const Snippets = () => {
     on(
       () => searchParams.id,
       () => {
-        setPendingVisualInsert(null)
-        setPendingVisualJump(null)
+        setPendingBuildInsert(null)
+        setPendingBuildJump(null)
+        if (isBasicSnippet() && isPlayMode()) {
+          setPlayRunVersion((version) => version + 1)
+        }
       }
     )
+  )
+
+  createEffect(
+    on(content, () => {
+      if (isBasicSnippet() && isPlayMode()) {
+        setPlayRunVersion((version) => version + 1)
+      }
+    })
   )
 
   // load snippets from folder
@@ -383,11 +603,12 @@ export const Snippets = () => {
       () => {
         if (!searchParams.folder) return
 
-        actions.loadFolder(searchParams.folder)
+        void actions.loadFolder(searchParams.folder)
 
         // reload snippets from folder every 2 seconds
         const watchFolder = window.setInterval(() => {
-          actions.loadFolder(searchParams.folder)
+          if (getInlineRenameSnippetId()) return
+          void actions.loadFolder(searchParams.folder)
         }, 2000)
 
         onCleanup(() => {
@@ -396,14 +617,6 @@ export const Snippets = () => {
       }
     )
   )
-
-  // update nameInputEl value
-  createEffect(() => {
-    const s = snippet()
-    if (s) {
-      nameInputControl.setValue(s.name)
-    }
-  })
 
   const loadContent = async () => {
     if (!searchParams.id) return
@@ -448,111 +661,109 @@ export const Snippets = () => {
   return (
     <div class="h-screen" classList={{ "is-mac": state.isMac }}>
       <div class="h-main flex">
-        <div
-          class="border-r w-64 shrink-0 h-full flex flex-col"
-          classList={{ "show-search": getSearchType() !== null }}
-        >
+        <div class="border-r w-64 shrink-0 h-full flex flex-col">
           <div class="sidebar-header text-zinc-500 dark:text-zinc-300 text-xs">
             <Show when={state.isMac}>
               <div class="h-6" data-tauri-drag-region></div>
             </Show>
             <div
-              data-tauri-drag-region
-              class="flex items-center justify-between px-2 h-10 shrink-0"
+              class="flex items-center px-2 h-10 shrink-0"
             >
               <Button
                 type="button"
                 onClick={() => setOpenFolderHistoryModal(true)}
                 tooltip={{ content: "Select folder" }}
                 icon="i-bi:folder"
-                class="-ml-[1px] max-w-[50%]"
+                class="-ml-[1px] max-w-full"
               >
                 {state.folder?.split(path.sep).pop()}
               </Button>
-              <div class="flex items-center">
+            </div>
+            <div class="px-3 pb-2">
+              <div class="h-2/5 flex items-center gap-1">
+                <input
+                  ref={searchInputEl}
+                  spellcheck={false}
+                  placeholder="Search"
+                  class="h-7 flex-1 min-w-0 flex items-center px-2 border rounded-lg bg-transparent focus:ring focus:border-blue-500 ring-blue-500 focus:outline-none"
+                  value={getSearchKeyword()!}
+                  onInput={(e) => setSearchKeyword(e.currentTarget.value)}
+                  onFocus={() => setIsSearchFocused(true)}
+                  onBlur={() => setIsSearchFocused(false)}
+                  onKeyPress={(e) => {
+                    if (e.key === "Escape") {
+                      e.preventDefault()
+                      if (getSearchType() === "trash") {
+                        setSearchType("non-trash")
+                        return
+                      }
+                      setSearchKeyword("")
+                    }
+                  }}
+                />
                 <Button
                   type="button"
                   icon="i-ic:outline-add"
                   onClick={newSnippet}
-                  tooltip={{ content: "New snippet" }}
+                  tooltip={{ content: "New script" }}
                 ></Button>
-                <Button
-                  type="button"
-                  icon="i-material-symbols:search"
-                  onClick={() => {
-                    if (getSearchType() === "non-trash") {
-                      setSearchType(null)
-                      return
-                    }
-                    setSearchType("non-trash")
-                  }}
-                  tooltip={{ content: "Show search box" }}
-                  isActive={getSearchType() === "non-trash"}
-                ></Button>
-                <Button
-                  type="button"
-                  icon="i-iconoir:bin"
-                  onClick={() => {
-                    if (getSearchType() === "trash") {
-                      setSearchType(null)
-                      return
-                    }
-                    setSearchType("trash")
-                  }}
-                  tooltip={{ content: "Show snippets in trash" }}
-                  isActive={getSearchType() === "trash"}
-                ></Button>
-              </div>
-            </div>
-            <Show when={getSearchType()}>
-              <div class="px-3 pb-2">
-                <div class="flex justify-between pb-1 text-xs">
-                  <span class="text-zinc-500 dark:text-zinc-300">
-                    {getSearchType() === "trash" ? "Trash" : "Search"}
-                  </span>
-                  <Show when={getSearchType() === "trash"}>
-                    <button
-                      type="button"
-                      disabled={snippets().length === 0}
-                      class="cursor whitespace-nowrap border-zinc-400 dark:border-zinc-600 border h-5/6 rounded-md px-2 flex items-center"
-                      classList={{
-                        "active:bg-zinc-200 dark:active:bg-zinc-700":
-                          snippets().length !== 0,
-                        "disabled:opacity-50": true,
-                      }}
-                      onClick={emptyTrash}
-                    >
-                      Empty
-                    </button>
-                  </Show>
-                </div>
-                <div class="h-2/5">
-                  <input
-                    ref={searchInputEl}
-                    spellcheck={false}
-                    class="h-7 w-full flex items-center px-2 border rounded-lg bg-transparent focus:ring focus:border-blue-500 ring-blue-500 focus:outline-none"
-                    value={getSearchKeyword()!}
-                    onInput={(e) => setSearchKeyword(e.currentTarget.value)}
-                    onKeyPress={(e) => {
-                      if (e.key === "Escape") {
-                        e.preventDefault()
-                        setSearchType(null)
-                      }
+                <Show when={!getIsSearchFocused()}>
+                  <button
+                    ref={trashButtonEl}
+                    type="button"
+                    title="Show scripts in trash"
+                    class="inline-flex items-center justify-center h-6 w-6 rounded-lg cursor active:ring-2 ring-blue-500 transition-colors"
+                    classList={{
+                      "ring-2 ring-blue-500 bg-blue-500/10": getIsTrashDropTarget(),
+                      "bg-blue-500 text-white": getSearchType() === "trash",
+                      "hover:bg-zinc-200 dark:hover:text-white dark:hover:bg-zinc-600":
+                        getSearchType() !== "trash",
                     }}
-                  />
-                </div>
+                    onClick={handleTrashButtonClick}
+                    onDragEnter={handleTrashDragOver}
+                    onDragOver={handleTrashDragOver}
+                    onDragLeave={handleTrashDragLeave}
+                    onDrop={(e) => void handleTrashDrop(e)}
+                  >
+                    <span class="w-4 h-4 shrink-0 i-iconoir:bin"></span>
+                  </button>
+                  <Button
+                    type="button"
+                    icon="i-ic:baseline-settings"
+                    onClick={openSettings}
+                    tooltip={{ content: "Settings" }}
+                  ></Button>
+                </Show>
               </div>
-            </Show>
+              <Show when={getSearchType() === "trash"}>
+                <div class="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    disabled={snippets().length === 0}
+                    class="cursor whitespace-nowrap border-zinc-400 dark:border-zinc-600 border h-6 rounded-md px-2 flex items-center text-xs"
+                    classList={{
+                      "active:bg-zinc-200 dark:active:bg-zinc-700":
+                        snippets().length !== 0,
+                      "disabled:opacity-50": true,
+                    }}
+                    onClick={emptyTrash}
+                  >
+                    Empty
+                  </button>
+                </div>
+              </Show>
+            </div>
           </div>
           <div class="sidebar-body group/sidebar-body flex-1 overflow-y-auto custom-scrollbar scrollbar-group p-2 pt-0 space-y-1">
             <For each={snippets()}>
               {(snippet) => {
                 return (
                   <Link
-                    href={`/snippets?${new URLSearchParams({
+                    href={`/scripts?${new URLSearchParams({
                       ...searchParams,
                       id: snippet.id,
                     }).toString()}`}
+                    draggable={getInlineRenameSnippetId() !== snippet.id}
                     classList={{
                       "group text-sm px-2 block select-none rounded-lg py-1 cursor":
                         true,
@@ -572,10 +783,64 @@ export const Snippets = () => {
                         })
                       }
                     }}
+                    onDragStart={(e) => handleSnippetDragStart(e, snippet.id)}
+                    onDragEnd={(e) => void handleSnippetDragEnd(e)}
                   >
-                    <div class="truncate">{snippet.name}</div>
+                    <Show
+                      when={getInlineRenameSnippetId() === snippet.id}
+                      fallback={
+                        <div
+                          class="truncate"
+                          onDblClick={(e) =>
+                            startInlineRename(e, snippet.id, snippet.name)
+                          }
+                        >
+                          {snippet.name}
+                        </div>
+                      }
+                    >
+                      <input
+                        ref={renameInputEl}
+                        spellcheck={false}
+                        class="h-6 w-full px-1 rounded border bg-transparent text-sm"
+                        classList={{
+                          "text-white border-blue-300": isSidebarSnippetActive(
+                            snippet.id
+                          ),
+                          "text-zinc-900 dark:text-zinc-100 border-blue-500":
+                            !isSidebarSnippetActive(snippet.id),
+                        }}
+                        value={getInlineRenameValue()}
+                        onInput={(e) =>
+                          setInlineRenameValue(e.currentTarget.value)
+                        }
+                        onMouseDown={(e) => {
+                          e.stopPropagation()
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                        }}
+                        onBlur={() => void saveInlineRename(snippet.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault()
+                            void saveInlineRename(snippet.id).then(() => {
+                              focusMainPane()
+                            })
+                          } else if (e.key === "Tab") {
+                            e.preventDefault()
+                            void saveInlineRename(snippet.id).then(() => {
+                              focusMainPane()
+                            })
+                          } else if (e.key === "Escape") {
+                            e.preventDefault()
+                            cancelInlineRename()
+                          }
+                        }}
+                      />
+                    </Show>
                     <div
-                      class="text-xs grid grid-cols-2 gap-1 mt-[1px]"
+                      class="text-xs mt-[1px]"
                       classList={{
                         "text-zinc-400 dark:text-zinc-500 group-hover:text-zinc-400":
                           !isSidebarSnippetActive(snippet.id),
@@ -583,40 +848,6 @@ export const Snippets = () => {
                       }}
                     >
                       <span class="truncate">{timeago(snippet.createdAt)}</span>
-                      <div class="flex justify-end items-center opacity-0 group-hover/sidebar-body:opacity-100">
-                        <button
-                          type="button"
-                          use:tooltip={{
-                            content: snippet.vscodeSnippet?.prefix?.trim()
-                              ? snippet.vscodeSnippet.prefix
-                              : "Set Snippet Prefix",
-                            placement: "top-end",
-                          }}
-                          class="cursor flex justify-end items-center max-w-full"
-                          classList={{
-                            "hover:text-white": isSidebarSnippetActive(
-                              snippet.id
-                            ),
-                            "hover:text-zinc-500": !isSidebarSnippetActive(
-                              snippet.id
-                            ),
-                          }}
-                          onClick={(e) => {
-                            setOpenVSCodeSnippetSettingsModal(snippet.id)
-                          }}
-                        >
-                          <Show
-                            when={snippet.vscodeSnippet?.prefix?.trim()}
-                            fallback={
-                              <span class="i-fluent:key-command-16-filled text-inherit"></span>
-                            }
-                          >
-                            <span class="truncate">
-                              {snippet.vscodeSnippet!.prefix}
-                            </span>
-                          </Show>
-                        </button>
-                      </div>
                     </div>
                   </Link>
                 )
@@ -632,149 +863,148 @@ export const Snippets = () => {
               class="h-full w-full flex items-center justify-center px-20 text-center text-zinc-400 text-xl"
             >
               <span class="select-none">
-                Select or create a snippet from sidebar
+                Select or create a script from sidebar
               </span>
             </div>
           }
         >
-          <div class="w-full h-full">
+          <div class="w-full h-full flex flex-col">
+            <Show when={state.isMac}>
+              <div class="h-6 shrink-0" data-tauri-drag-region></div>
+            </Show>
             <div
               data-tauri-drag-region
-              class="border-b flex h-mainHeader items-center px-3 justify-between space-x-3"
+              class="border-b flex h-mainHeader shrink-0 items-center px-3"
             >
-              <input
-                value={nameInputControl.value}
-                spellcheck={false}
-                class="w-full h-full focus:outline-none bg-transparent"
-                onInput={nameInputControl.onInput}
-              />
-              <div class="flex items-center text-xs text-zinc-500 dark:text-zinc-300 space-x-1">
-                <Button
-                  type="button"
-                  icon="i-ic:baseline-play-arrow"
-                  onClick={() => void openRunner()}
-                  tooltip={{ content: "Run BASIC in new window" }}
-                />
-                <Show when={isBasicSnippet()}>
+              <div class="flex-1"></div>
+              <div class="flex-1 flex justify-center">
+                <Show
+                  when={isBasicSnippet()}
+                  fallback={
+                    <div class="inline-flex items-center rounded-lg border overflow-hidden h-8">
+                      <button
+                        type="button"
+                        title="Code"
+                        class="cursor w-9 h-full bg-blue-500 text-white inline-flex items-center justify-center"
+                      >
+                        <span class="w-[1.1rem] h-[1.1rem] shrink-0 i-ic:outline-terminal"></span>
+                      </button>
+                    </div>
+                  }
+                >
                   <div class="inline-flex items-center rounded-lg border overflow-hidden h-8">
                     <button
                       type="button"
-                      class="cursor px-2 h-full"
+                      title={`Run in Play (${runShortcutLabel()})`}
+                      class="cursor w-9 h-full inline-flex items-center justify-center"
                       classList={{
-                        "bg-blue-500 text-white": !getIsVisualMode(),
+                        "bg-blue-500 text-white": isPlayMode(),
                         "hover:bg-zinc-100 dark:hover:bg-zinc-700":
-                          getIsVisualMode(),
+                          !isPlayMode(),
                       }}
-                      onClick={() => setIsVisualMode(false)}
+                      onClick={runInPlayMode}
                     >
-                      Code
+                      <span class="w-[1.1rem] h-[1.1rem] shrink-0 i-ic:baseline-play-arrow"></span>
                     </button>
                     <button
                       type="button"
-                      class="cursor px-2 h-full border-l"
+                      title="Code"
+                      class="cursor w-9 h-full border-l inline-flex items-center justify-center"
                       classList={{
-                        "bg-blue-500 text-white": getIsVisualMode(),
+                        "bg-blue-500 text-white": getMainMode() === "code",
                         "hover:bg-zinc-100 dark:hover:bg-zinc-700":
-                          !getIsVisualMode(),
+                          getMainMode() !== "code",
                       }}
-                      onClick={() => setIsVisualMode(true)}
+                      onClick={() => setMainMode("code")}
                     >
-                      Visual
+                      <span class="w-[1.1rem] h-[1.1rem] shrink-0 i-ic:outline-terminal"></span>
+                    </button>
+                    <button
+                      type="button"
+                      title="Build"
+                      class="cursor w-9 h-full border-l inline-flex items-center justify-center"
+                      classList={{
+                        "bg-blue-500 text-white": isBuildMode(),
+                        "hover:bg-zinc-100 dark:hover:bg-zinc-700":
+                          !isBuildMode(),
+                      }}
+                      onClick={() => setMainMode("build")}
+                    >
+                      <span class="w-[1.1rem] h-[1.1rem] shrink-0 i-ic:outline-extension"></span>
                     </button>
                   </div>
                 </Show>
-                <Show when={isBasicSnippet()}>
+              </div>
+              <div class="flex-1 flex items-center justify-end text-xs text-zinc-500 dark:text-zinc-300 space-x-1">
+                <Show when={isBasicSnippet() && !isPlayMode()}>
                   <Button
                     type="button"
+                    icon="i-ic:outline-find-in-page"
+                    iconClass="w-5 h-5"
                     onClick={openLineJump}
                     tooltip={{ content: "Jump to BASIC line number" }}
-                  >
-                    Goto
-                  </Button>
+                  />
                 </Show>
-                <Show when={isBasicSnippet()}>
+                <Show when={isBasicSnippet() && !isPlayMode()}>
                   <Button
                     type="button"
                     icon="i-majesticons:curly-braces"
+                    iconClass="w-5 h-5"
                     onClick={() => setOpenBasicCommandModal(true)}
                     tooltip={{ content: "Insert BASIC command reference" }}
-                  >
-                    Commands
-                  </Button>
+                  />
                 </Show>
-                <div class="group relative">
-                  <Button icon="i-ic:baseline-more-horiz"></Button>
-                  <div
-                    aria-label="Dropdown"
-                    class="hidden absolute bg-white dark:bg-zinc-700 z-10 py-1 right-0 min-w-[100px] border rounded-lg shadow group-hover:block"
-                  >
-                    <button
-                      type="button"
-                      class="cursor w-full px-3 h-6 flex items-center whitespace-nowrap hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-zinc-500"
-                      onClick={() =>
-                        setOpenVSCodeSnippetSettingsModal(snippet()!.id)
-                      }
-                    >
-                      VSCode snippet
-                    </button>
-                    <button
-                      type="button"
-                      class="cursor w-full px-3 h-6 flex items-center whitespace-nowrap hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-zinc-500"
-                      onClick={() => moveSnippetToTrashOrRestore(snippet()!.id)}
-                    >
-                      {snippet()!.deletedAt
-                        ? "Restore from Trash"
-                        : "Move to Trash"}
-                    </button>
-                    <Show when={snippet()!.deletedAt}>
-                      <button
-                        type="button"
-                        class="cursor w-full px-3 h-6 flex items-center whitespace-nowrap hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-zinc-500"
-                        onClick={() => deleteForever(snippet()!.id)}
-                      >
-                        Delete forever
-                      </button>
-                    </Show>
-                  </div>
-                </div>
               </div>
             </div>
             <div
-              class="h-mainBody"
+              ref={mainPaneEl}
+              class="flex-1 min-h-0"
               classList={{
-                "overflow-y-auto": !getIsVisualMode(),
-                "overflow-hidden": getIsVisualMode(),
+                "overflow-y-auto": !isBasicSnippet() || getMainMode() === "code",
+                "overflow-hidden": isBasicSnippet() && getMainMode() !== "code",
               }}
             >
               <Show
-                when={isBasicSnippet() && getIsVisualMode()}
+                when={isBasicSnippet() && isPlayMode()}
                 fallback={
-                  <Editor
-                    value={content()}
-                    onChange={handleEditorChange}
-                    onTemplateTrigger={() => setOpenBasicCommandModal(true)}
-                    onViewReady={(view) => {
-                      editorView = view
-                    }}
-                    extensions={editorExtensions()}
-                  />
+                  <Show
+                    when={isBasicSnippet() && isBuildMode()}
+                    fallback={
+                      <Editor
+                        value={content()}
+                        onChange={handleEditorChange}
+                        onTemplateTrigger={() => setOpenBasicCommandModal(true)}
+                        onViewReady={(view) => {
+                          editorView = view
+                        }}
+                        extensions={editorExtensions()}
+                      />
+                    }
+                  >
+                    <BasicBlocklyEditor
+                      source={content()}
+                      onSourceChange={handleEditorChange}
+                      pendingInsert={getPendingBuildInsert()}
+                      onPendingInsertHandled={(id) => {
+                        if (getPendingBuildInsert()?.id === id) {
+                          setPendingBuildInsert(null)
+                        }
+                      }}
+                      pendingJump={getPendingBuildJump()}
+                      onPendingJumpHandled={(id) => {
+                        if (getPendingBuildJump()?.id === id) {
+                          setPendingBuildJump(null)
+                        }
+                      }}
+                    />
+                  </Show>
                 }
               >
-                <BasicBlocklyEditor
+                <BasicRunnerCanvas
                   source={content()}
-                  onSourceChange={handleEditorChange}
-                  pendingInsert={getPendingVisualInsert()}
-                  onPendingInsertHandled={(id) => {
-                    if (getPendingVisualInsert()?.id === id) {
-                      setPendingVisualInsert(null)
-                    }
-                  }}
-                  pendingJump={getPendingVisualJump()}
-                  onPendingJumpHandled={(id) => {
-                    if (getPendingVisualJump()?.id === id) {
-                      setPendingVisualJump(null)
-                    }
-                  }}
+                  snippetName={snippet()!.name}
+                  runVersion={getPlayRunVersion()}
+                  class="h-full w-full bg-black overflow-hidden flex items-center justify-center relative"
                 />
               </Show>
             </div>
@@ -786,7 +1016,7 @@ export const Snippets = () => {
         open={getOpenBasicCommandModal()}
         setOpen={setOpenBasicCommandModal}
         insertCommandSnippet={insertBasicCommandSnippet}
-        allowedKinds={getIsVisualMode() ? ["statement"] : undefined}
+        allowedKinds={isBuildMode() ? ["statement"] : undefined}
       />
       <LineJumpModal
         open={getOpenLineJumpModal()}
@@ -797,10 +1027,6 @@ export const Snippets = () => {
         open={getOpenFolderHistoryModal()}
         setOpen={setOpenFolderHistoryModal}
       />
-      <VSCodeSnippetSettingsModal
-        snippetId={getOpenVSCodeSnippetSettingsModal()}
-        close={() => setOpenVSCodeSnippetSettingsModal(undefined)}
-      />
       <div
         classList={{
           "-bottom-10": getSelectedSnippetIds().length === 0,
@@ -809,16 +1035,16 @@ export const Snippets = () => {
         class="fixed left-1/2 transform -translate-x-1/2"
         style="transition: bottom .3s ease-in-out"
       >
-        <button
-          type="button"
-          class="cursor inline-flex items-center bg-white dark:bg-zinc-700 rounded-lg shadow border px-3 h-9 hover:bg-zinc-100"
-          onClick={moveSelectedSnippetsToTrashOrRestore}
-        >
-          {getSearchType() === "trash"
-            ? `Restore ${actualSelectedSnippetIds().length} snippets from Trash`
-            : `Move ${actualSelectedSnippetIds().length} snippets to Trash`}
-        </button>
+          <button
+            type="button"
+            class="cursor inline-flex items-center bg-white dark:bg-zinc-700 rounded-lg shadow border px-3 h-9 hover:bg-zinc-100"
+            onClick={moveSelectedSnippetsToTrashOrRestore}
+          >
+            {getSearchType() === "trash"
+              ? `Restore ${actualSelectedSnippetIds().length} scripts from Trash`
+              : `Move ${actualSelectedSnippetIds().length} scripts to Trash`}
+          </button>
+        </div>
       </div>
-    </div>
   )
 }

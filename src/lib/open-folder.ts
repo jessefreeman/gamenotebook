@@ -11,7 +11,7 @@ export const useOpenFolderDialog = () => {
     })
 
     if (typeof folder === "string") {
-      goto(`/snippets?${new URLSearchParams({ folder }).toString()}`)
+      goto(`/scripts?${new URLSearchParams({ folder }).toString()}`)
     }
   }
 

@@ -72,17 +72,14 @@ input:focus {
   @apply max-h-[500px] overflow-y-auto;
 }
 
-.custom-scrollbar::-webkit-scrollbar,
-.cm-scroller::-webkit-scrollbar {
+.custom-scrollbar::-webkit-scrollbar {
   width: 10px;
 }
 
-.custom-scrollbar::-webkit-scrollbar-track,
-.cm-scroller::-webkit-scrollbar-track {
+.custom-scrollbar::-webkit-scrollbar-track {
 }
 
-.custom-scrollbar::-webkit-scrollbar-thumb,
-.cm-scroller::-webkit-scrollbar-thumb {
+.custom-scrollbar::-webkit-scrollbar-thumb {
   @apply opacity-0 bg-zinc-300 dark:bg-zinc-700 hover:bg-zinc-400 dark:hover:bg-zinc-700/75;
 }
 
@@ -91,11 +88,22 @@ input:focus {
   @apply opacity-100;
 }
 
+.cm-scroller {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.cm-scroller::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 .basic-blockly-editor .blocklySvg {
   background: transparent;
 }
 
-.basic-blockly-editor .basic-block-line-number {
+.basic-blockly-editor .basic-block-line-number,
+.basic-blockly-editor .basic-block-line-number .blocklyText {
   font-family:
     "SFMono-Regular",
     Menlo,
@@ -106,18 +114,29 @@ input:focus {
     monospace;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
-  fill: #1e3a8a;
+  fill: #1e3a8a !important;
 }
 
 .basic-blockly-editor .basic-block-line-number-pill {
-  fill: #dbeafe;
+  fill: #bfdbfe !important;
   stroke: none;
 }
 
-.dark .basic-blockly-editor .basic-block-line-number {
-  fill: #bfdbfe;
+.dark .basic-blockly-editor .basic-block-line-number,
+.dark .basic-blockly-editor .basic-block-line-number .blocklyText {
+  fill: #bfdbfe !important;
 }
 
 .dark .basic-blockly-editor .basic-block-line-number-pill {
-  fill: #1e293b;
+  fill: #334155 !important;
+}
+
+.basic-blockly-editor .blocklyMainBackground {
+  stroke: transparent !important;
+}
+
+.basic-blockly-editor .blocklyMainWorkspaceScrollbar,
+.basic-blockly-editor .blocklyScrollbarHorizontal,
+.basic-blockly-editor .blocklyScrollbarVertical {
+  display: none !important;
 }
