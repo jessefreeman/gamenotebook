@@ -26,21 +26,32 @@ Options:
 }
 
 function run(command, args, options = {}) {
+  const useShell = process.platform === "win32"
   const result = spawnSync(command, args, {
     stdio: "inherit",
     cwd: options.cwd,
     env: options.env,
-    shell: false,
+    shell: useShell,
   })
 
+  const cmd = [command, ...args].join(" ")
+  if (result.error) {
+    throw new Error(`Failed to start command: ${cmd}\n${result.error.message}`)
+  }
+
   if (result.status !== 0) {
-    const cmd = [command, ...args].join(" ")
-    throw new Error(`Command failed (${result.status}): ${cmd}`)
+    const exitDetails =
+      result.status === null
+        ? result.signal
+          ? `signal ${result.signal}`
+          : "unknown"
+        : `exit ${result.status}`
+    throw new Error(`Command failed (${exitDetails}): ${cmd}`)
   }
 }
 
 function getPnpmCommand() {
-  return process.platform === "win32" ? "pnpm.cmd" : "pnpm"
+  return "pnpm"
 }
 
 function normalizePlatform(value) {
