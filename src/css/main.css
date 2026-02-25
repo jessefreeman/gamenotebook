@@ -94,3 +94,30 @@ input:focus {
 .basic-blockly-editor .blocklySvg {
   background: transparent;
 }
+
+.basic-blockly-editor .basic-block-line-number {
+  font-family:
+    "SFMono-Regular",
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  fill: #1e3a8a;
+}
+
+.basic-blockly-editor .basic-block-line-number-pill {
+  fill: #dbeafe;
+  stroke: none;
+}
+
+.dark .basic-blockly-editor .basic-block-line-number {
+  fill: #bfdbfe;
+}
+
+.dark .basic-blockly-editor .basic-block-line-number-pill {
+  fill: #1e293b;
+}

@@ -198,6 +198,9 @@ const trimTrailingEmpty = (parts: string[]): string[] => {
 
 const emitArgs = (...parts: string[]): string => trimTrailingEmpty(parts).join(",")
 
+const normalizeJumpTarget = (value: string): string =>
+  value.trim().replace(/^#\s*/, "")
+
 export const parseBasicStatementToVisual = (
   statement: string
 ): BasicVisualStatement => {
@@ -284,12 +287,12 @@ export const parseBasicStatementToVisual = (
 
   const gotoTail = takeKeyword(trimmed, "GOTO")
   if (gotoTail !== null) {
-    return makeStatement("goto", { line: gotoTail.trim() })
+    return makeStatement("goto", { line: normalizeJumpTarget(gotoTail) })
   }
 
   const gosubTail = takeKeyword(trimmed, "GOSUB")
   if (gosubTail !== null) {
-    return makeStatement("gosub", { line: gosubTail.trim() })
+    return makeStatement("gosub", { line: normalizeJumpTarget(gosubTail) })
   }
 
   if (takeKeyword(trimmed, "RETURN") !== null) {
@@ -453,11 +456,13 @@ export const emitBasicStatementFromVisual = (
   }
 
   if (statement.kind === "goto") {
-    return `GOTO ${field("line", "1")}`
+    const target = normalizeJumpTarget(statement.fields.line ?? "") || "1"
+    return `GOTO #${target}`
   }
 
   if (statement.kind === "gosub") {
-    return `GOSUB ${field("line", "1")}`
+    const target = normalizeJumpTarget(statement.fields.line ?? "") || "1"
+    return `GOSUB #${target}`
   }
 
   if (statement.kind === "return") {
@@ -538,10 +543,6 @@ export const parseBasicSourceToVisualLines = (source: string): BasicVisualLine[]
     const body = (lineMatch?.[2] ?? trimmed).trim()
 
     if (!body) {
-      lines.push({
-        legacyLineNumber,
-        statement: makeStatement("raw", { code: "" }),
-      })
       continue
     }
 
@@ -550,10 +551,6 @@ export const parseBasicSourceToVisualLines = (source: string): BasicVisualLine[]
       .filter((part) => part.length > 0)
 
     if (statements.length === 0) {
-      lines.push({
-        legacyLineNumber,
-        statement: makeStatement("raw", { code: "" }),
-      })
       continue
     }
 
@@ -582,5 +579,6 @@ export const emitBasicSourceFromVisualLines = (
 
       return body
     })
+    .filter((line) => line.length > 0)
     .join("\n")
 }

@@ -90,13 +90,27 @@ If `1420` is already in use, stop the existing dev server/instance first, then r
 
 ### Release Builds (Local-First)
 
-Default behavior auto-detects the host platform:
+Quick local workflow:
+
+1. Run live-reload desktop dev:
+
+```bash
+pnpm dev:live
+```
+
+2. In a second terminal, run a release package build for your current OS:
 
 ```bash
 pnpm build:release
 ```
 
-Manual platform commands:
+3. Verify generated artifacts:
+
+```bash
+ls -la release-files
+```
+
+Manual platform commands (run on matching host OS):
 
 ```bash
 pnpm build:release:macos
@@ -110,11 +124,14 @@ Output layout:
 
 1. `release-files/GameNotebook_<version>_macos.dmg` (includes `Applications` symlink for drag-to-install)
 2. `release-files/GameNotebook_<version>_windows_standalone.exe`
-3. `release-files/GameNotebook_<version>_windows_installer.msi` (and NSIS `.exe` when generated)
+3. `release-files/GameNotebook_<version>_windows_installer.msi`
 4. `release-files/GameNotebook_<version>_linux.*` (`.AppImage`, `.deb`, or `.rpm` depending on host/tooling)
 
 GitHub Actions uses the same local build command per OS (`pnpm build:release -- --platform <os>`), then uploads `release-files/*` to the tag release.
 If one platform build fails, the workflow still publishes the release with whichever platform artifacts were produced successfully.
+
+Detailed build architecture and hardening notes:
+`docs/build-system-hardening.md`
 
 ### Versioned macOS `.app` Build (Fast Local App Bundle)
 

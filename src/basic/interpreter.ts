@@ -725,6 +725,10 @@ export class BasicRuntime {
     this.nextIp = index
   }
 
+  private normalizeJumpTargetExpression(expression: string): string {
+    return expression.trim().replace(/^#\s*/, "")
+  }
+
   private async executeStatement(statement: string): Promise<void> {
     if (!statement) return
     const upper = statement.toUpperCase()
@@ -795,14 +799,18 @@ export class BasicRuntime {
 
     const gotoTail = takeKeyword(statement, "GOTO")
     if (gotoTail !== null) {
-      this.jumpToLineNumber(this.evalExpression(gotoTail))
+      this.jumpToLineNumber(
+        this.evalExpression(this.normalizeJumpTargetExpression(gotoTail))
+      )
       return
     }
 
     const gosubTail = takeKeyword(statement, "GOSUB")
     if (gosubTail !== null) {
       this.callStack.push(this.ip + 1)
-      this.jumpToLineNumber(this.evalExpression(gosubTail))
+      this.jumpToLineNumber(
+        this.evalExpression(this.normalizeJumpTargetExpression(gosubTail))
+      )
       return
     }
 
@@ -1011,12 +1019,26 @@ export class BasicRuntime {
     const selected = isTruthy(condition) ? thenPart : elsePart
     if (!selected) return
 
-    if (/^\d+$/.test(selected)) {
-      this.jumpToLineNumber(Number.parseInt(selected, 10))
+    const selectedStatements = splitTopLevel(selected, ":")
+      .map((part) => part.trim())
+      .filter(Boolean)
+    if (selectedStatements.length === 0) {
       return
     }
 
-    await this.executeStatement(selected)
+    for (const selectedStatement of selectedStatements) {
+      if (/^#?\d+$/.test(selectedStatement)) {
+        this.jumpToLineNumber(
+          Number.parseInt(this.normalizeJumpTargetExpression(selectedStatement), 10)
+        )
+      } else {
+        await this.executeStatement(selectedStatement)
+      }
+
+      if (this.nextIp !== null || this.halted) {
+        break
+      }
+    }
   }
 
   private handleFor(statement: string): void {

@@ -1,19 +1,45 @@
 import * as Blockly from "blockly/core"
-import type {
-  BasicVisualLine,
-  BasicVisualStatement,
-  BasicVisualStatementKind,
+import {
+  emitBasicStatementFromVisual,
+  parseBasicStatementToVisual,
+  type BasicVisualLine,
+  type BasicVisualStatement,
+  type BasicVisualStatementKind,
 } from "./blockly-model"
 
 type BlocklyBlockDefinition = {
   type: string
   message0: string
   args0?: unknown[]
-  previousStatement: null
-  nextStatement: null
+  message1?: string
+  args1?: unknown[]
+  message2?: string
+  args2?: unknown[]
+  previousStatement?: null
+  nextStatement?: null
   colour: number
   tooltip?: string
 }
+
+type BlockMetadata = {
+  legacyLineNumber?: string
+  forNextVariable?: string
+  forNextLegacyLineNumber?: string
+}
+
+type WorkspaceVisualNode = {
+  line: BasicVisualLine
+  forBody?: WorkspaceVisualNode[]
+  ifThen?: WorkspaceVisualNode[]
+  ifElse?: WorkspaceVisualNode[]
+  forNextVariable?: string
+  forNextLegacyLineNumber?: string
+}
+
+const FOR_BLOCK_TYPE = "basic_stmt_for"
+const IF_BLOCK_TYPE = "basic_stmt_if"
+const SCRIPT_ENTRY_BLOCK_TYPE = "basic_script_entry"
+const LINE_NUMBER_FIELD_TYPE = "basic_line_number_field"
 
 const BLOCK_TYPE_BY_KIND: Record<BasicVisualStatementKind, string> = {
   rem: "basic_stmt_rem",
@@ -25,11 +51,11 @@ const BLOCK_TYPE_BY_KIND: Record<BasicVisualStatementKind, string> = {
   locate: "basic_stmt_locate",
   print: "basic_stmt_print",
   input: "basic_stmt_input",
-  if: "basic_stmt_if",
+  if: IF_BLOCK_TYPE,
   goto: "basic_stmt_goto",
   gosub: "basic_stmt_gosub",
   return: "basic_stmt_return",
-  for: "basic_stmt_for",
+  for: FOR_BLOCK_TYPE,
   next: "basic_stmt_next",
   dim: "basic_stmt_dim",
   pset: "basic_stmt_pset",
@@ -58,7 +84,7 @@ const STATEMENT_FIELD_KEYS: Record<BasicVisualStatementKind, string[]> = {
   locate: ["col", "row"],
   print: ["value"],
   input: ["value"],
-  if: ["condition", "then", "else"],
+  if: ["condition"],
   goto: ["line"],
   gosub: ["line"],
   return: [],
@@ -82,6 +108,80 @@ const toBlockFieldName = (
   }
 
   return fieldName.toUpperCase()
+}
+
+const parseBlockMetadata = (block: Blockly.Block): BlockMetadata => {
+  if (!block.data) return {}
+
+  try {
+    const parsed = JSON.parse(block.data) as Partial<BlockMetadata>
+    const metadata: BlockMetadata = {}
+
+    if (typeof parsed.legacyLineNumber === "string") {
+      metadata.legacyLineNumber = parsed.legacyLineNumber
+    }
+    if (typeof parsed.forNextVariable === "string") {
+      metadata.forNextVariable = parsed.forNextVariable
+    }
+    if (typeof parsed.forNextLegacyLineNumber === "string") {
+      metadata.forNextLegacyLineNumber = parsed.forNextLegacyLineNumber
+    }
+
+    return metadata
+  } catch {
+    return {}
+  }
+}
+
+const setBlockMetadata = (
+  block: Blockly.Block,
+  patch: Partial<BlockMetadata>
+): void => {
+  const metadata = {
+    ...parseBlockMetadata(block),
+    ...patch,
+  }
+
+  block.data = JSON.stringify(metadata)
+}
+
+const normalizeVariableName = (value: string): string => value.trim().toUpperCase()
+
+const SCRIPT_ENTRY_BLOCK_DEFINITION: BlocklyBlockDefinition = {
+  type: SCRIPT_ENTRY_BLOCK_TYPE,
+  message0: "SCRIPT",
+  nextStatement: null,
+  colour: 260,
+}
+
+class LineNumberField extends Blockly.FieldLabelSerializable {
+  constructor(value = "") {
+    super(value, "basic-block-line-number")
+  }
+
+  static fromJson(options: Blockly.FieldConfig): LineNumberField {
+    const text =
+      typeof (options as { text?: unknown }).text === "string"
+        ? ((options as { text: string }).text ?? "")
+        : ""
+
+    return new LineNumberField(text)
+  }
+
+  initView(): void {
+    this.createBorderRect_()
+    super.initView()
+
+    const border = this.getBorderRect()
+    border.setAttribute("rx", "8")
+    border.setAttribute("ry", "8")
+    border.classList.add("basic-block-line-number-pill")
+  }
+
+  protected override render_(): void {
+    this.updateSize_(12)
+    this.positionBorderRect_()
+  }
 }
 
 const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
@@ -208,23 +308,27 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
     colour: 160,
   },
   {
-    type: "basic_stmt_if",
-    message0: "IF %1 THEN %2 ELSE %3",
+    type: IF_BLOCK_TYPE,
+    message0: "IF %1",
     args0: [
       {
         type: "field_input",
         name: "CONDITION",
         text: "A=1",
       },
+    ],
+    message1: "THEN %1",
+    args1: [
       {
-        type: "field_input",
-        name: "THEN",
-        text: "PRINT \"YES\"",
+        type: "input_statement",
+        name: "THEN_BODY",
       },
+    ],
+    message2: "ELSE %1",
+    args2: [
       {
-        type: "field_input",
-        name: "ELSE",
-        text: "",
+        type: "input_statement",
+        name: "ELSE_BODY",
       },
     ],
     previousStatement: null,
@@ -233,12 +337,12 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
   },
   {
     type: "basic_stmt_goto",
-    message0: "GOTO %1",
+    message0: "GOTO # %1",
     args0: [
       {
         type: "field_input",
         name: "TARGET",
-        text: "10",
+        text: "1",
       },
     ],
     previousStatement: null,
@@ -247,12 +351,12 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
   },
   {
     type: "basic_stmt_gosub",
-    message0: "GOSUB %1",
+    message0: "GOSUB # %1",
     args0: [
       {
         type: "field_input",
         name: "TARGET",
-        text: "100",
+        text: "1",
       },
     ],
     previousStatement: null,
@@ -267,7 +371,7 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
     colour: 40,
   },
   {
-    type: "basic_stmt_for",
+    type: FOR_BLOCK_TYPE,
     message0: "FOR %1 = %2 TO %3 STEP %4",
     args0: [
       {
@@ -291,6 +395,14 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
         text: "",
       },
     ],
+    message1: "DO %1",
+    args1: [
+      {
+        type: "input_statement",
+        name: "BODY",
+      },
+    ],
+    message2: "NEXT",
     previousStatement: null,
     nextStatement: null,
     colour: 40,
@@ -469,119 +581,184 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
   },
 ]
 
-const withLineNumberField = (
+const withLineNumberLabel = (
   definition: BlocklyBlockDefinition
 ): BlocklyBlockDefinition => {
-  const shiftedMessage = definition.message0.replace(/%(\d+)/g, (_match, raw) => {
+  const shiftedMessage = definition.message0.replace(/%(\d+)/g, (match, raw) => {
     const index = Number.parseInt(raw, 10)
     if (!Number.isInteger(index) || index < 1) {
-      return _match
+      return match
     }
-    return `%${index + 2}`
+    return `%${index + 1}`
   })
 
   return {
     ...definition,
-    message0: `line %1 # %2 ${shiftedMessage}`,
+    message0: `%1 ${shiftedMessage}`,
     args0: [
       {
-        type: "field_label_serializable",
+        type: LINE_NUMBER_FIELD_TYPE,
         name: "LINE_INDEX",
         text: "1",
-      },
-      {
-        type: "field_input",
-        name: "LINE",
-        text: "",
       },
       ...(definition.args0 ?? []),
     ],
   }
 }
 
-const BASIC_BLOCK_DEFINITIONS = STATEMENT_BLOCK_DEFINITIONS.map(withLineNumberField)
+const BASIC_BLOCK_DEFINITIONS = STATEMENT_BLOCK_DEFINITIONS.map(
+  withLineNumberLabel
+)
 
 let blocksRegistered = false
+let lineNumberFieldRegistered = false
 
 export const ensureBasicBlocklyBlocks = (): void => {
-  if (blocksRegistered || Blockly.Blocks["basic_stmt_rem"]) {
+  if (!lineNumberFieldRegistered) {
+    try {
+      Blockly.fieldRegistry.register(LINE_NUMBER_FIELD_TYPE, LineNumberField)
+    } catch {
+      // May already be registered by hot-reload.
+    }
+    lineNumberFieldRegistered = true
+  }
+
+  if (blocksRegistered || Blockly.Blocks[SCRIPT_ENTRY_BLOCK_TYPE]) {
     blocksRegistered = true
     return
   }
 
-  Blockly.defineBlocksWithJsonArray(BASIC_BLOCK_DEFINITIONS)
+  Blockly.defineBlocksWithJsonArray([
+    SCRIPT_ENTRY_BLOCK_DEFINITION,
+    ...BASIC_BLOCK_DEFINITIONS,
+  ])
   blocksRegistered = true
 }
 
-const getOrderedVisualBlocks = (
-  workspace: Blockly.WorkspaceSvg
-): Blockly.Block[] => {
-  const ordered: Blockly.Block[] = []
-  const rootBlocks = workspace.getTopBlocks(true)
+const isStatementVisualBlock = (block: Blockly.Block): boolean =>
+  Object.prototype.hasOwnProperty.call(KIND_BY_BLOCK_TYPE, block.type)
 
-  for (const rootBlock of rootBlocks) {
-    let block: Blockly.Block | null = rootBlock
-    while (block) {
-      ordered.push(block)
-      block = block.getNextBlock()
-    }
-  }
-
-  return ordered
+const setupScriptEntryBlock = (block: Blockly.Block): void => {
+  block.setMovable(false)
+  block.setDeletable(false)
+  block.setEditable(false)
 }
 
-export const updateVisualLineNumberLabels = (
+const findScriptEntryBlock = (
   workspace: Blockly.WorkspaceSvg
-): void => {
-  const orderedBlocks = getOrderedVisualBlocks(workspace)
-  for (let index = 0; index < orderedBlocks.length; index += 1) {
-    const block = orderedBlocks[index]
-    if (!block.getField("LINE_INDEX")) continue
+): Blockly.Block | null =>
+  workspace
+    .getTopBlocks(false)
+    .find((block) => block.type === SCRIPT_ENTRY_BLOCK_TYPE) ?? null
 
-    const lineValue = (index + 1).toString()
-    if (block.getFieldValue("LINE_INDEX") !== lineValue) {
-      block.setFieldValue(lineValue, "LINE_INDEX")
-    }
+const ensureScriptEntryBlock = (workspace: Blockly.WorkspaceSvg): Blockly.Block => {
+  const existing = findScriptEntryBlock(workspace)
+  if (existing) {
+    setupScriptEntryBlock(existing)
+    return existing
   }
+
+  const entry = workspace.newBlock(SCRIPT_ENTRY_BLOCK_TYPE)
+  entry.initSvg()
+  entry.render()
+  entry.moveBy(32, 32)
+  setupScriptEntryBlock(entry)
+  return entry
 }
 
-export const findVisualBlockByLineNumber = (
-  workspace: Blockly.WorkspaceSvg,
-  targetLineNumber: number
-): Blockly.Block | null => {
-  if (!Number.isInteger(targetLineNumber) || targetLineNumber <= 0) {
+const DETACHED_STATEMENT_PREFIX =
+  /^(END|STOP|CLS|COLOR|LOCATE|PRINT|INPUT|IF|GOTO|GOSUB|RETURN|FOR|NEXT|DIM|PSET|LINE|RECT|LET)\b/i
+const DETACHED_ASSIGNMENT_PREFIX = /^[A-Z][A-Z0-9_$]*(\([^)]*\))?\s*=/i
+const normalizeJumpTarget = (value: string): string =>
+  value.trim().replace(/^#\s*/, "")
+
+const looksLikeDetachedStatementComment = (text: string): boolean =>
+  DETACHED_STATEMENT_PREFIX.test(text) || DETACHED_ASSIGNMENT_PREFIX.test(text)
+
+const parseDetachedCommentLine = (line: BasicVisualLine): BasicVisualLine | null => {
+  if (line.statement.kind !== "apostrophe") return null
+
+  const text = (line.statement.fields.text ?? "").trim()
+  if (!text || !looksLikeDetachedStatementComment(text)) {
     return null
   }
 
-  const orderedBlocks = getOrderedVisualBlocks(workspace)
-  const byIndex = orderedBlocks[targetLineNumber - 1]
-  if (byIndex) {
-    return byIndex
+  const statement = parseBasicStatementToVisual(text)
+  if (statement.kind === "apostrophe" || statement.kind === "rem") {
+    return null
   }
 
-  for (const block of orderedBlocks) {
-    const lineValue = block.getFieldValue("LINE")
-    const legacyLine = Number.parseInt(
-      typeof lineValue === "string" ? lineValue : "",
-      10
-    )
-    if (legacyLine === targetLineNumber) {
-      return block
+  return {
+    legacyLineNumber: "",
+    statement,
+  }
+}
+
+const encodeDetachedCommentLine = (line: BasicVisualLine): BasicVisualLine => {
+  const body = emitBasicStatementFromVisual(line.statement).trim()
+
+  return {
+    legacyLineNumber: "",
+    statement: {
+      kind: "apostrophe",
+      fields: {
+        text: body,
+      },
+    },
+  }
+}
+
+const splitTopLevelInline = (text: string, delimiter: string): string[] => {
+  const result: string[] = []
+  let start = 0
+  let depth = 0
+  let inString = false
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+
+    if (char === "\"") {
+      if (inString && text[index + 1] === "\"") {
+        index += 1
+        continue
+      }
+      inString = !inString
+      continue
+    }
+
+    if (inString) continue
+    if (char === "(") {
+      depth += 1
+      continue
+    }
+    if (char === ")") {
+      depth = Math.max(0, depth - 1)
+      continue
+    }
+    if (depth === 0 && char === delimiter) {
+      result.push(text.slice(start, index))
+      start = index + 1
     }
   }
 
-  return null
+  result.push(text.slice(start))
+  return result
 }
 
 const setBlockFieldsFromLine = (block: Blockly.Block, line: BasicVisualLine): void => {
-  if (block.getField("LINE")) {
-    block.setFieldValue(line.legacyLineNumber, "LINE")
-  }
+  setBlockMetadata(block, {
+    legacyLineNumber: line.legacyLineNumber,
+  })
 
   const fields = STATEMENT_FIELD_KEYS[line.statement.kind]
   for (const fieldName of fields) {
     const blockFieldName = toBlockFieldName(line.statement.kind, fieldName)
-    const value = line.statement.fields[fieldName] ?? ""
+    const rawValue = line.statement.fields[fieldName] ?? ""
+    const value =
+      fieldName === "line" &&
+      (line.statement.kind === "goto" || line.statement.kind === "gosub")
+        ? normalizeJumpTarget(rawValue) || "1"
+        : rawValue
     if (block.getField(blockFieldName)) {
       block.setFieldValue(value, blockFieldName)
     }
@@ -609,36 +786,403 @@ const readVisualLineFromBlock = (block: Blockly.Block): BasicVisualLine | null =
     STATEMENT_FIELD_KEYS[kind].map((fieldName) => {
       const blockFieldName = toBlockFieldName(kind, fieldName)
       const value = block.getFieldValue(blockFieldName)
-      return [fieldName, typeof value === "string" ? value : ""]
+      const text = typeof value === "string" ? value : ""
+      if (
+        fieldName === "line" &&
+        (kind === "goto" || kind === "gosub")
+      ) {
+        return [fieldName, normalizeJumpTarget(text)]
+      }
+      return [fieldName, text]
     })
   )
 
-  const lineValue = block.getFieldValue("LINE")
-  const legacyLineNumber =
-    typeof lineValue === "string" ? lineValue.trim() : ""
+  const metadata = parseBlockMetadata(block)
 
   const statement: BasicVisualStatement = { kind, fields }
 
   return {
-    legacyLineNumber,
+    legacyLineNumber: metadata.legacyLineNumber ?? "",
     statement,
   }
+}
+
+const parseInlineStatementToNode = (statement: string): WorkspaceVisualNode[] =>
+  buildWorkspaceNodes(
+    splitTopLevelInline(statement, ":")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+      .map((part) => ({
+        legacyLineNumber: "",
+        statement: parseBasicStatementToVisual(part),
+      }))
+  )
+
+const buildNodeFromLine = (line: BasicVisualLine): WorkspaceVisualNode => {
+  if (line.statement.kind !== "if") {
+    return { line }
+  }
+
+  return {
+    line: {
+      ...line,
+      statement: {
+        ...line.statement,
+        fields: {
+          condition: line.statement.fields.condition ?? "",
+        },
+      },
+    },
+    ifThen: parseInlineStatementToNode(line.statement.fields.then ?? ""),
+    ifElse: parseInlineStatementToNode(line.statement.fields.else ?? ""),
+  }
+}
+
+const findMatchingNextIndex = (
+  lines: BasicVisualLine[],
+  start: number,
+  end: number,
+  forVariable: string
+): number => {
+  let depth = 0
+  const normalizedForVariable = normalizeVariableName(forVariable)
+
+  for (let index = start; index < end; index += 1) {
+    const current = lines[index]
+
+    if (current.statement.kind === "for") {
+      depth += 1
+      continue
+    }
+
+    if (current.statement.kind !== "next") {
+      continue
+    }
+
+    if (depth > 0) {
+      depth -= 1
+      continue
+    }
+
+    const normalizedNextVariable = normalizeVariableName(
+      current.statement.fields.variable ?? ""
+    )
+    if (
+      !normalizedNextVariable ||
+      !normalizedForVariable ||
+      normalizedNextVariable === normalizedForVariable
+    ) {
+      return index
+    }
+  }
+
+  return -1
+}
+
+const buildWorkspaceNodes = (lines: BasicVisualLine[]): WorkspaceVisualNode[] => {
+  const nodes: WorkspaceVisualNode[] = []
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+
+    if (line.statement.kind !== "for") {
+      nodes.push(buildNodeFromLine(line))
+      continue
+    }
+
+    const matchIndex = findMatchingNextIndex(
+      lines,
+      index + 1,
+      lines.length,
+      line.statement.fields.variable ?? ""
+    )
+
+    if (matchIndex < 0) {
+      nodes.push({ line })
+      continue
+    }
+
+    const nextLine = lines[matchIndex]
+    nodes.push({
+      line,
+      forBody: buildWorkspaceNodes(lines.slice(index + 1, matchIndex)),
+      forNextVariable: nextLine.statement.fields.variable ?? "",
+      forNextLegacyLineNumber: nextLine.legacyLineNumber,
+    })
+
+    index = matchIndex
+  }
+
+  return nodes
+}
+
+const connectStatementChain = (
+  parent: Blockly.Connection | null,
+  child: Blockly.Block | null
+): void => {
+  if (!parent || !child?.previousConnection) return
+  parent.connect(child.previousConnection)
+}
+
+const buildBlockChain = (
+  workspace: Blockly.WorkspaceSvg,
+  nodes: WorkspaceVisualNode[]
+): { first: Blockly.Block; last: Blockly.Block } | null => {
+  let first: Blockly.Block | null = null
+  let previous: Blockly.Block | null = null
+
+  for (const node of nodes) {
+    const block = createStatementBlockFromNode(workspace, node)
+
+    if (!first) {
+      first = block
+    }
+
+    if (previous?.nextConnection && block.previousConnection) {
+      previous.nextConnection.connect(block.previousConnection)
+    }
+
+    previous = block
+  }
+
+  if (!first || !previous) {
+    return null
+  }
+
+  return { first, last: previous }
+}
+
+const createStatementBlockFromNode = (
+  workspace: Blockly.WorkspaceSvg,
+  node: WorkspaceVisualNode
+): Blockly.Block => {
+  const block = createStatementBlockFromLine(workspace, node.line)
+
+  if (node.line.statement.kind === "for") {
+    setBlockMetadata(block, {
+      forNextVariable: node.forNextVariable ?? "",
+      forNextLegacyLineNumber: node.forNextLegacyLineNumber ?? "",
+    })
+
+    const bodyChain = buildBlockChain(workspace, node.forBody ?? [])
+    connectStatementChain(block.getInput("BODY")?.connection ?? null, bodyChain?.first ?? null)
+  }
+
+  if (node.line.statement.kind === "if") {
+    const thenChain = buildBlockChain(workspace, node.ifThen ?? [])
+    connectStatementChain(
+      block.getInput("THEN_BODY")?.connection ?? null,
+      thenChain?.first ?? null
+    )
+
+    const elseChain = buildBlockChain(workspace, node.ifElse ?? [])
+    connectStatementChain(
+      block.getInput("ELSE_BODY")?.connection ?? null,
+      elseChain?.first ?? null
+    )
+  }
+
+  return block
+}
+
+const collectBlockAndNested = (block: Blockly.Block, ordered: Blockly.Block[]) => {
+  ordered.push(block)
+
+  if (block.type === FOR_BLOCK_TYPE) {
+    const body = block.getInputTargetBlock("BODY")
+    collectBlockChain(body, ordered)
+    return
+  }
+
+  if (block.type === IF_BLOCK_TYPE) {
+    const thenBody = block.getInputTargetBlock("THEN_BODY")
+    const elseBody = block.getInputTargetBlock("ELSE_BODY")
+    collectBlockChain(thenBody, ordered)
+    collectBlockChain(elseBody, ordered)
+  }
+}
+
+const collectBlockChain = (
+  startBlock: Blockly.Block | null,
+  ordered: Blockly.Block[]
+) => {
+  let block = startBlock
+  while (block) {
+    collectBlockAndNested(block, ordered)
+    block = block.getNextBlock()
+  }
+}
+
+const getDetachedRootBlocks = (
+  workspace: Blockly.WorkspaceSvg,
+  scriptEntry: Blockly.Block
+): Blockly.Block[] =>
+  workspace
+    .getTopBlocks(true)
+    .filter(
+      (root) => root.id !== scriptEntry.id && isStatementVisualBlock(root)
+    )
+
+const getActiveVisualBlocks = (
+  workspace: Blockly.WorkspaceSvg
+): Blockly.Block[] => {
+  const scriptEntry = ensureScriptEntryBlock(workspace)
+  const ordered: Blockly.Block[] = []
+  collectBlockChain(scriptEntry.getNextBlock(), ordered)
+  return ordered
+}
+
+const getDetachedVisualBlocks = (
+  workspace: Blockly.WorkspaceSvg
+): Blockly.Block[] => {
+  const scriptEntry = ensureScriptEntryBlock(workspace)
+  const ordered: Blockly.Block[] = []
+  const roots = getDetachedRootBlocks(workspace, scriptEntry)
+
+  for (const root of roots) {
+    collectBlockChain(root, ordered)
+  }
+
+  return ordered
+}
+
+const formatLineIndexLabel = (lineNumber: number, width: number): string =>
+  lineNumber.toString().padStart(width, "0")
+
+export const updateVisualLineNumberLabels = (
+  workspace: Blockly.WorkspaceSvg
+): void => {
+  const activeBlocks = getActiveVisualBlocks(workspace)
+  const lineNumberWidth = Math.max(1, activeBlocks.length.toString().length)
+
+  for (let index = 0; index < activeBlocks.length; index += 1) {
+    const block = activeBlocks[index]
+    if (!block.getField("LINE_INDEX")) continue
+
+    const nextValue = formatLineIndexLabel(index + 1, lineNumberWidth)
+    if (block.getFieldValue("LINE_INDEX") !== nextValue) {
+      block.setFieldValue(nextValue, "LINE_INDEX")
+    }
+  }
+
+  for (const block of getDetachedVisualBlocks(workspace)) {
+    if (!block.getField("LINE_INDEX")) continue
+    if (block.getFieldValue("LINE_INDEX") !== "") {
+      block.setFieldValue("", "LINE_INDEX")
+    }
+  }
+}
+
+export const findVisualBlockByLineNumber = (
+  workspace: Blockly.WorkspaceSvg,
+  targetLineNumber: number
+): Blockly.Block | null => {
+  if (!Number.isInteger(targetLineNumber) || targetLineNumber <= 0) {
+    return null
+  }
+
+  const activeBlocks = getActiveVisualBlocks(workspace)
+  const byVisualIndex = activeBlocks[targetLineNumber - 1]
+  if (byVisualIndex) {
+    return byVisualIndex
+  }
+
+  for (const block of activeBlocks) {
+    const metadata = parseBlockMetadata(block)
+    const legacy = Number.parseInt(metadata.legacyLineNumber ?? "", 10)
+    if (legacy === targetLineNumber) {
+      return block
+    }
+
+    const nextLegacy = Number.parseInt(metadata.forNextLegacyLineNumber ?? "", 10)
+    if (nextLegacy === targetLineNumber) {
+      return block
+    }
+  }
+
+  return null
+}
+
+const readInlineStatementsFromInput = (
+  block: Blockly.Block,
+  inputName: string
+): string => {
+  const first = block.getInputTargetBlock(inputName)
+  if (!first) return ""
+
+  const lines = readLinesFromBlockChain(first)
+  return lines
+    .map((line) => emitBasicStatementFromVisual(line.statement).trim())
+    .filter((statement) => statement.length > 0)
+    .join(" : ")
+}
+
+const readLinesFromBlock = (block: Blockly.Block): BasicVisualLine[] => {
+  const line = readVisualLineFromBlock(block)
+  if (!line) return []
+
+  if (line.statement.kind === "for") {
+    const metadata = parseBlockMetadata(block)
+    const bodyLines = readLinesFromBlockChain(block.getInputTargetBlock("BODY"))
+    const nextVariable = (metadata.forNextVariable ?? "").trim()
+
+    const nextLine: BasicVisualLine = {
+      legacyLineNumber: metadata.forNextLegacyLineNumber ?? "",
+      statement: {
+        kind: "next",
+        fields: nextVariable ? { variable: nextVariable } : {},
+      },
+    }
+
+    return [line, ...bodyLines, nextLine]
+  }
+
+  if (line.statement.kind === "if") {
+    return [
+      {
+        ...line,
+        statement: {
+          ...line.statement,
+          fields: {
+            ...line.statement.fields,
+            then: readInlineStatementsFromInput(block, "THEN_BODY"),
+            else: readInlineStatementsFromInput(block, "ELSE_BODY"),
+          },
+        },
+      },
+    ]
+  }
+
+  return [line]
+}
+
+const readLinesFromBlockChain = (
+  startBlock: Blockly.Block | null
+): BasicVisualLine[] => {
+  const lines: BasicVisualLine[] = []
+  let block = startBlock
+
+  while (block) {
+    lines.push(...readLinesFromBlock(block))
+    block = block.getNextBlock()
+  }
+
+  return lines
 }
 
 export const readVisualLinesFromWorkspace = (
   workspace: Blockly.WorkspaceSvg
 ): BasicVisualLine[] => {
-  const lines: BasicVisualLine[] = []
-  const orderedBlocks = getOrderedVisualBlocks(workspace)
+  const scriptEntry = ensureScriptEntryBlock(workspace)
+  const activeLines = readLinesFromBlockChain(scriptEntry.getNextBlock())
+  const detachedLines: BasicVisualLine[] = []
 
-  for (const block of orderedBlocks) {
-    const line = readVisualLineFromBlock(block)
-    if (line) {
-      lines.push(line)
-    }
+  const detachedRoots = getDetachedRootBlocks(workspace, scriptEntry)
+  for (const root of detachedRoots) {
+    detachedLines.push(...readLinesFromBlockChain(root))
   }
 
-  return lines
+  return [...activeLines, ...detachedLines.map(encodeDetachedCommentLine)]
 }
 
 const findTailBlock = (root: Blockly.Block): Blockly.Block => {
@@ -658,23 +1202,31 @@ export const loadVisualLinesIntoWorkspace = (
   lines: BasicVisualLine[]
 ): void => {
   workspace.clear()
+  const scriptEntry = ensureScriptEntryBlock(workspace)
 
-  let previousBlock: Blockly.Block | null = null
+  const activeLines: BasicVisualLine[] = []
+  const detachedLines: BasicVisualLine[] = []
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const block = createStatementBlockFromLine(workspace, lines[index])
-
-    if (!previousBlock) {
-      block.moveBy(32, 32 + index * 64)
-    } else {
-      const parentConnection = previousBlock.nextConnection
-      const childConnection = block.previousConnection
-      if (parentConnection && childConnection) {
-        parentConnection.connect(childConnection)
-      }
+  for (const line of lines) {
+    const detachedLine = parseDetachedCommentLine(line)
+    if (detachedLine) {
+      detachedLines.push(detachedLine)
+      continue
     }
+    activeLines.push(line)
+  }
 
-    previousBlock = block
+  const activeNodes = buildWorkspaceNodes(activeLines)
+  const activeChain = buildBlockChain(workspace, activeNodes)
+  connectStatementChain(
+    scriptEntry.nextConnection ?? null,
+    activeChain?.first ?? null
+  )
+
+  const detachedNodes = buildWorkspaceNodes(detachedLines)
+  const detachedChain = buildBlockChain(workspace, detachedNodes)
+  if (detachedChain?.first) {
+    detachedChain.first.moveBy(420, 32)
   }
 
   updateVisualLineNumberLabels(workspace)
@@ -685,26 +1237,27 @@ export const appendVisualLineToWorkspace = (
   workspace: Blockly.WorkspaceSvg,
   line: BasicVisualLine
 ): void => {
-  const newBlock = createStatementBlockFromLine(workspace, line)
-  const rootBlocks = workspace
-    .getTopBlocks(true)
-    .filter((block) => block.id !== newBlock.id)
+  const scriptEntry = ensureScriptEntryBlock(workspace)
+  const node = buildNodeFromLine(line)
+  const chain = buildBlockChain(workspace, [node])
+  if (!chain) return
 
-  if (rootBlocks.length === 0) {
-    newBlock.moveBy(32, 32)
+  const activeRoot = scriptEntry.getNextBlock()
+  if (!activeRoot) {
+    connectStatementChain(
+      scriptEntry.nextConnection ?? null,
+      chain.first
+    )
+    updateVisualLineNumberLabels(workspace)
     workspace.render()
     return
   }
 
-  const anchorRoot = rootBlocks[rootBlocks.length - 1]
-  const tail = findTailBlock(anchorRoot)
-  const parentConnection = tail.nextConnection
-  const childConnection = newBlock.previousConnection
-
-  if (parentConnection && childConnection) {
-    parentConnection.connect(childConnection)
+  const tail = findTailBlock(activeRoot)
+  if (tail.nextConnection && chain.first.previousConnection) {
+    tail.nextConnection.connect(chain.first.previousConnection)
   } else {
-    newBlock.moveBy(32, 32 + rootBlocks.length * 64)
+    chain.first.moveBy(420, 32)
   }
 
   updateVisualLineNumberLabels(workspace)

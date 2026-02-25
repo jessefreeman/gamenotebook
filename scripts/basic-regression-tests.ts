@@ -76,7 +76,28 @@ const cases: BasicRegressionCase[] = [
   {
     name: "Loops + Grid draws full border and star grid without diagonal artifacts",
     scenario: {
-      source: readGame("basic_loops"),
+      source: `CLS
+COLOR 6,0
+FOR X=0 TO 31
+LOCATE X,0
+PRINT "-";
+LOCATE X,29
+PRINT "-";
+NEXT X
+FOR Y=1 TO 28
+LOCATE 0,Y
+PRINT "|";
+LOCATE 31,Y
+PRINT "|";
+NEXT Y
+COLOR 14,0
+FOR Y=2 TO 27 STEP 5
+FOR X=2 TO 27 STEP 5
+LOCATE X,Y
+PRINT "*";
+NEXT X
+NEXT Y
+END`,
     },
     expectation: makeLoopsExpectation(),
     debugRows: 10,
@@ -84,7 +105,30 @@ const cases: BasicRegressionCase[] = [
   {
     name: "Inkey Control consumes key queue and exits on Q",
     scenario: {
-      source: readGame("basic_inkey"),
+      source: `CLS
+X=15
+Y=14
+LOCATE 0,0
+COLOR 15,0
+PRINT "WASD MOVE, Q QUIT"
+COLOR 7,0
+LOCATE X,Y
+PRINT "@";
+OLDX=X
+OLDY=Y
+K$=INKEY$
+IF K$="a" THEN X=X-1
+IF K$="d" THEN X=X+1
+IF K$="w" THEN Y=Y-1
+IF K$="s" THEN Y=Y+1
+IF K$="q" THEN END
+IF X<0 THEN X=0
+IF X>31 THEN X=31
+IF Y<1 THEN Y=1
+IF Y>29 THEN Y=29
+IF X<>OLDX OR Y<>OLDY THEN LOCATE OLDX,OLDY
+IF X<>OLDX OR Y<>OLDY THEN PRINT " ";
+GOTO 8`,
       keys: ["d", "s", "q"],
     },
     expectation: {
@@ -118,7 +162,15 @@ const cases: BasicRegressionCase[] = [
   {
     name: "Arrays and DIM print square values",
     scenario: {
-      source: readGame("basic_arrays"),
+      source: `CLS
+DIM N(8)
+FOR I=0 TO 8
+N(I)=I*I
+NEXT I
+FOR I=0 TO 8
+PRINT "N(";I;")=";N(I)
+NEXT I
+END`,
     },
     expectation: {
       error: null,

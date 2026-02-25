@@ -39,7 +39,22 @@ export const BasicBlocklyEditor = (props: {
   let hostEl: HTMLDivElement | undefined
   let workspace: Blockly.WorkspaceSvg | null = null
   let syncingFromSource = false
+  let mutatingWorkspace = false
   let lastWorkspaceSource = ""
+
+  const normalizeSource = (source: string): string =>
+    emitBasicSourceFromVisualLines(parseBasicSourceToVisualLines(source))
+
+  const runWorkspaceMutation = (callback: () => void) => {
+    mutatingWorkspace = true
+    Blockly.Events.disable()
+    try {
+      callback()
+    } finally {
+      Blockly.Events.enable()
+      mutatingWorkspace = false
+    }
+  }
 
   const emitWorkspaceSource = () => {
     if (!workspace || syncingFromSource) return
@@ -57,12 +72,30 @@ export const BasicBlocklyEditor = (props: {
     if (!workspace) return
 
     syncingFromSource = true
-    const lines = parseBasicSourceToVisualLines(source)
-    loadVisualLinesIntoWorkspace(workspace, lines)
-    updateVisualLineNumberLabels(workspace)
-    lastWorkspaceSource = emitBasicSourceFromVisualLines(
+    const normalizedSource = normalizeSource(source)
+    const lines = parseBasicSourceToVisualLines(normalizedSource)
+
+    runWorkspaceMutation(() => {
+      loadVisualLinesIntoWorkspace(workspace!, lines)
+      updateVisualLineNumberLabels(workspace!)
+    })
+
+    let roundtrip = emitBasicSourceFromVisualLines(
       readVisualLinesFromWorkspace(workspace)
     )
+
+    if (roundtrip !== normalizedSource) {
+      // Retry once in case Blockly connection state was mid-update on first pass.
+      runWorkspaceMutation(() => {
+        loadVisualLinesIntoWorkspace(workspace!, lines)
+        updateVisualLineNumberLabels(workspace!)
+      })
+      roundtrip = emitBasicSourceFromVisualLines(
+        readVisualLinesFromWorkspace(workspace)
+      )
+    }
+
+    lastWorkspaceSource = roundtrip
     syncingFromSource = false
   }
 
@@ -97,9 +130,12 @@ export const BasicBlocklyEditor = (props: {
     })
 
     const onWorkspaceChange = (event: Blockly.Events.Abstract) => {
+      if (mutatingWorkspace || syncingFromSource) return
       if (event.type === Blockly.Events.UI) return
       if (workspace) {
-        updateVisualLineNumberLabels(workspace)
+        runWorkspaceMutation(() => {
+          updateVisualLineNumberLabels(workspace!)
+        })
       }
       emitWorkspaceSource()
     }
@@ -146,9 +182,11 @@ export const BasicBlocklyEditor = (props: {
           return
         }
 
-        appendVisualLineToWorkspace(workspace, {
-          legacyLineNumber: "",
-          statement: parseBasicStatementToVisual(statement),
+        runWorkspaceMutation(() => {
+          appendVisualLineToWorkspace(workspace!, {
+            legacyLineNumber: "",
+            statement: parseBasicStatementToVisual(statement),
+          })
         })
 
         emitWorkspaceSource()
