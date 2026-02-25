@@ -48,6 +48,14 @@ requireSnippet(
   "Preflight must validate semantic version tag format."
 )
 requireSnippet(
+  "fetch-depth: 0",
+  "Preflight checkout must fetch full history for branch ancestry checks."
+)
+requireSnippet(
+  "git merge-base --is-ancestor \"${GITHUB_SHA}\" \"origin/main\"",
+  "Preflight must verify the tagged commit is on origin/main history."
+)
+requireSnippet(
   "require('./src-tauri/tauri.conf.json').package.version",
   "Preflight must validate tag version against src-tauri/tauri.conf.json."
 )
