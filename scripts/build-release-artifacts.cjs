@@ -11,7 +11,7 @@ const VALID_PLATFORMS = new Set(["macos", "windows", "linux"])
 
 const BUNDLES_BY_PLATFORM = {
   macos: "app",
-  windows: "msi,nsis",
+  windows: "msi",
   linux: "appimage,deb",
 }
 

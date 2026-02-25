@@ -98,7 +98,14 @@ requireSnippet(
   "release:\n    name: Publish GitHub release",
   "Missing release publish job."
 )
-requireSnippet("needs: build", "Release job must depend on build.")
+requireSnippet(
+  "if: always() && needs.preflight.result == 'success'",
+  "Release job must run even if one matrix build fails after preflight succeeds."
+)
+requireSnippet(
+  "needs:\n      - preflight\n      - build",
+  "Release job must depend on preflight and build."
+)
 requireSnippet(
   "uses: actions/download-artifact@v4",
   "Release job must download build artifacts."
@@ -106,6 +113,10 @@ requireSnippet(
 requireSnippet(
   "files: release-artifacts/*",
   "Release job must publish artifacts downloaded from build jobs."
+)
+requireSnippet(
+  "fail_on_unmatched_files: false",
+  "Release job must allow partial artifact publication when one platform fails."
 )
 
 requireScript(
