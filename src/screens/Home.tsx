@@ -12,7 +12,7 @@ export const Home = () => {
     const firstFolder = state.app.folders[0]
     if (firstFolder) {
       goto(
-        `/snippets?${new URLSearchParams({ folder: firstFolder }).toString()}`
+        `/scripts?${new URLSearchParams({ folder: firstFolder }).toString()}`
       )
     }
   })

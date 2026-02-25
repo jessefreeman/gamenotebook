@@ -9,6 +9,7 @@ export const Button = (props: {
   tooltip?: TooltipOptions
   isActive?: boolean
   icon?: string
+  iconClass?: string
   class?: string
 }) => {
   return (
@@ -32,7 +33,7 @@ export const Button = (props: {
       >
         <Show when={props.icon}>
           <span
-            class="w-4 h-4 shrink-0"
+            class={`w-4 h-4 shrink-0 ${props.iconClass ?? ""}`}
             classList={{ [props.icon!]: true }}
           ></span>
         </Show>

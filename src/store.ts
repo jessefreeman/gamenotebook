@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid"
-import { fs, path, dialog, os } from "@tauri-apps/api"
+import { dialog, fs, path } from "@tauri-apps/api"
 import { BaseDirectory } from "@tauri-apps/api/fs"
 import { createStore } from "solid-js/store"
 
@@ -10,14 +10,17 @@ export interface Snippet {
   updatedAt: string
   language?: string
   deletedAt?: string
-  vscodeSnippet?: {
-    prefix?: string
-  }
 }
 
 interface AppData {
   folders: string[]
 }
+
+interface SnippetIndexData {
+  folders: Record<string, Snippet[]>
+}
+
+const SNIPPET_INDEX_FILENAME = "snippet-index.json"
 
 const [state, setState] = createStore<{
   ready: boolean
@@ -37,13 +40,7 @@ const [state, setState] = createStore<{
 
 export { state }
 
-const writeSnippetsJson = async (folder: string, snippets: Snippet[]) => {
-  console.log("writing snippets.json")
-  await fs.writeTextFile(
-    await path.join(folder, "snippets.json"),
-    JSON.stringify(snippets)
-  )
-}
+let snippetIndexCache: SnippetIndexData | null = null
 
 const writeAppJson = async (appData: AppData) => {
   await fs.createDir("", { dir: BaseDirectory.App, recursive: true })
@@ -55,6 +52,149 @@ const writeAppJson = async (appData: AppData) => {
 const pathExists = async (path: string, baseDir?: BaseDirectory) => {
   const exists: boolean = await fs.exists(path, { dir: baseDir })
   return exists
+}
+
+const formatSnippetNameFromId = (id: string) => {
+  const value = id.replace(/[_-]+/g, " ").trim()
+  if (!value) return "Untitled"
+  return value.replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+const createDefaultSnippet = (id: string): Snippet => {
+  const now = new Date().toISOString()
+  return {
+    id,
+    name: formatSnippetNameFromId(id),
+    createdAt: now,
+    updatedAt: now,
+    language: "basic",
+  }
+}
+
+const normalizeSnippet = (value: unknown): Snippet | null => {
+  if (!value || typeof value !== "object") return null
+
+  const source = value as Partial<Snippet>
+  if (typeof source.id !== "string" || !source.id.trim()) {
+    return null
+  }
+
+  const fallback = createDefaultSnippet(source.id)
+  return {
+    id: source.id,
+    name:
+      typeof source.name === "string" && source.name.trim()
+        ? source.name
+        : fallback.name,
+    createdAt:
+      typeof source.createdAt === "string"
+        ? source.createdAt
+        : fallback.createdAt,
+    updatedAt:
+      typeof source.updatedAt === "string"
+        ? source.updatedAt
+        : fallback.updatedAt,
+    language:
+      typeof source.language === "string" ? source.language : fallback.language,
+    deletedAt: typeof source.deletedAt === "string" ? source.deletedAt : undefined,
+  }
+}
+
+const normalizeSnippets = (value: unknown): Snippet[] => {
+  if (!Array.isArray(value)) return []
+
+  return value.reduce<Snippet[]>((all, item) => {
+    const snippet = normalizeSnippet(item)
+    if (snippet) all.push(snippet)
+    return all
+  }, [])
+}
+
+const loadSnippetIndex = async (): Promise<SnippetIndexData> => {
+  if (snippetIndexCache) return snippetIndexCache
+
+  const text = await fs
+    .readTextFile(SNIPPET_INDEX_FILENAME, { dir: BaseDirectory.App })
+    .catch(() => "{}")
+
+  let parsed: unknown = {}
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    console.error(error)
+  }
+
+  const folders: Record<string, Snippet[]> = {}
+  const sourceFolders =
+    parsed && typeof parsed === "object"
+      ? (parsed as { folders?: Record<string, unknown> }).folders
+      : undefined
+
+  if (sourceFolders && typeof sourceFolders === "object") {
+    for (const [folder, snippets] of Object.entries(sourceFolders)) {
+      folders[folder] = normalizeSnippets(snippets)
+    }
+  }
+
+  snippetIndexCache = { folders }
+  return snippetIndexCache
+}
+
+const writeSnippetIndex = async (index: SnippetIndexData) => {
+  await fs.createDir("", { dir: BaseDirectory.App, recursive: true })
+  await fs.writeTextFile(SNIPPET_INDEX_FILENAME, JSON.stringify(index), {
+    dir: BaseDirectory.App,
+  })
+}
+
+const getStoredSnippetsForFolder = async (folder: string): Promise<Snippet[]> => {
+  const index = await loadSnippetIndex()
+  return normalizeSnippets(index.folders[folder])
+}
+
+const setStoredSnippetsForFolder = async (folder: string, snippets: Snippet[]) => {
+  const index = await loadSnippetIndex()
+  index.folders[folder] = snippets
+  await writeSnippetIndex(index)
+}
+
+const listSnippetFileIds = async (folder: string): Promise<string[]> => {
+  const entries = await fs.readDir(folder).catch((error) => {
+    console.error(error)
+    return []
+  })
+
+  const ids = entries
+    .filter((entry) => entry.children === undefined)
+    .map((entry) => entry.name || "")
+    .filter((name) => name && !name.startsWith("."))
+
+  return [...new Set(ids)].sort((a, b) => a.localeCompare(b))
+}
+
+const reconcileSnippetsWithFiles = (snippets: Snippet[], fileIds: string[]) => {
+  const snippetsById = new Map(snippets.map((snippet) => [snippet.id, snippet]))
+
+  return fileIds.map((id) => {
+    const existing = snippetsById.get(id)
+    return existing || createDefaultSnippet(id)
+  })
+}
+
+const loadSnippetsForFolder = async (folder: string): Promise<Snippet[]> => {
+  const storedSnippets = await getStoredSnippetsForFolder(folder)
+  const fileIds = await listSnippetFileIds(folder)
+  const reconciledSnippets = reconcileSnippetsWithFiles(storedSnippets, fileIds)
+
+  if (JSON.stringify(storedSnippets) !== JSON.stringify(reconciledSnippets)) {
+    await setStoredSnippetsForFolder(folder, reconciledSnippets)
+  }
+
+  return reconciledSnippets
+}
+
+const persistSnippets = async (folder: string, snippets: Snippet[]) => {
+  await setStoredSnippetsForFolder(folder, snippets)
 }
 
 export const actions = {
@@ -94,16 +234,10 @@ export const actions = {
       await dialog.message("Folder doesn't exist")
       return
     }
-    const snippetsPath = await path.join(folder, "snippets.json")
-    const text = await fs.readTextFile(snippetsPath).catch((error) => {
-      console.error(error)
-      return null
-    })
-    if (text) {
-      const snippets = JSON.parse(text)
+
+    const snippets = await loadSnippetsForFolder(folder)
+    if (JSON.stringify(state.snippets) !== JSON.stringify(snippets)) {
       setState("snippets", snippets)
-    } else {
-      setState("snippets", [])
     }
 
     if (state.app.folders.includes(folder)) {
@@ -124,8 +258,8 @@ export const actions = {
     const filepath = await path.join(state.folder, snippet.id)
     await fs.writeTextFile(filepath, content)
     const snippets = [...state.snippets, snippet]
-    await writeSnippetsJson(state.folder, snippets)
     setState("snippets", snippets)
+    await persistSnippets(state.folder, snippets)
   },
 
   getRandomId: () => {
@@ -153,9 +287,7 @@ export const actions = {
     })
 
     setState("snippets", snippets)
-
-    await writeSnippetsJson(state.folder, snippets)
-    await actions.syncSnippetsToVscode()
+    await persistSnippets(state.folder, snippets)
   },
 
   updateSnippetContent: async (id: string, content: string) => {
@@ -179,20 +311,16 @@ export const actions = {
     })
 
     setState("snippets", snippets)
-
-    await writeSnippetsJson(state.folder, snippets)
-    await actions.syncSnippetsToVscode()
+    await persistSnippets(state.folder, snippets)
   },
 
   deleteSnippetForever: async (id: string) => {
     if (!state.folder) return
 
-    const snippets = state.snippets.filter((snippet) => {
-      return id !== snippet.id
-    })
-    await writeSnippetsJson(state.folder, snippets)
+    const snippets = state.snippets.filter((snippet) => id !== snippet.id)
     await fs.removeFile(await path.join(state.folder, id))
     setState("snippets", snippets)
+    await persistSnippets(state.folder, snippets)
   },
 
   emptyTrash: async () => {
@@ -204,13 +332,13 @@ export const actions = {
       }
       return !snippet.deletedAt
     })
-    await writeSnippetsJson(state.folder, snippets)
     await Promise.all(
       toDelete.map(async (id) => {
         return fs.removeFile(await path.join(state.folder!, id))
       })
     )
     setState("snippets", snippets)
+    await persistSnippets(state.folder, snippets)
   },
 
   getFolderHistory: async () => {
@@ -219,76 +347,5 @@ export const actions = {
       .catch(() => "[]")
     const folders: string[] = JSON.parse(text)
     return folders
-  },
-
-  syncSnippetsToVscode: async () => {
-    if (!state.folder) return
-
-    const folderName = state.folder.split(path.sep).pop()!
-
-    type VSCodeSnippets = Record<
-      string,
-      { scope: string; prefix: string[]; body: string[]; __folderName: string }
-    >
-
-    const newSnippets: VSCodeSnippets = {}
-
-    for (const s of state.snippets) {
-      const prefix = s.vscodeSnippet?.prefix?.trim()
-
-      if (!prefix || s.deletedAt) {
-        continue
-      }
-
-      newSnippets[s.name] = {
-        scope: "",
-        prefix: prefix
-          .split(",")
-          .map((v) => v.trim())
-          .filter(Boolean),
-        body: [await actions.readSnippetContent(s.id)],
-        __folderName: folderName,
-      }
-    }
-
-    const snippetsFileName = "gamenotebook.code-snippets"
-    const codeSnippetsDir = `Code${path.sep}User${path.sep}snippets`
-    const snippetsFilePath = `${codeSnippetsDir}${path.sep}${snippetsFileName}`
-
-    // VSCode is not installed
-    if (!(await pathExists("Code", BaseDirectory.Data))) {
-      return
-    }
-
-    // Get existing snippets
-    const snippets: VSCodeSnippets = (await pathExists(
-      snippetsFilePath,
-      BaseDirectory.Data
-    ))
-      ? JSON.parse(
-          await fs.readTextFile(snippetsFilePath, { dir: BaseDirectory.Data })
-        )
-      : {}
-
-    // Merge old and new snippets
-    for (const name in snippets) {
-      const snippet = snippets[name]
-      if (snippet.__folderName === folderName) {
-        delete snippets[name]
-      }
-    }
-    Object.assign(snippets, newSnippets)
-
-    // Write to file
-    console.log("writing", snippetsFilePath)
-    await fs.createDir(codeSnippetsDir, {
-      recursive: true,
-      dir: BaseDirectory.Data,
-    })
-    await fs.writeTextFile(
-      snippetsFilePath,
-      JSON.stringify(snippets, null, 2),
-      { dir: BaseDirectory.Data }
-    )
   },
 }

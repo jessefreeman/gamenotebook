@@ -104,6 +104,8 @@ export const BasicBlocklyEditor = (props: {
       return
     }
 
+    Blockly.Scrollbar.scrollbarThickness = 10
+
     ensureBasicBlocklyBlocks()
 
     workspace = Blockly.inject(hostEl, {
@@ -124,7 +126,7 @@ export const BasicBlocklyEditor = (props: {
       grid: {
         spacing: 20,
         length: 3,
-        colour: "#d4d4d8",
+        colour: "rgba(212, 212, 216, 0.1)",
         snap: false,
       },
     })

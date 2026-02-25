@@ -4,6 +4,7 @@ import { appWindow } from "@tauri-apps/api/window"
 import { onMount, Show } from "solid-js"
 import { Home } from "../screens/Home"
 import { Runner } from "../screens/Runner"
+import { Settings } from "../screens/Settings"
 import { Snippets } from "../screens/Snippets"
 import { actions, state } from "../store"
 
@@ -25,7 +26,8 @@ export const App = () => {
         fallback={
           <Routes>
             <Route path="/" component={Home} />
-            <Route path="/snippets" component={Snippets} />
+            <Route path="/scripts" component={Snippets} />
+            <Route path="/settings" component={Settings} />
           </Routes>
         }
       >
