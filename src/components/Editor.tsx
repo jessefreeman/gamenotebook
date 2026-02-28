@@ -16,12 +16,65 @@ const parseDocumentLineNumber = (
   return null
 }
 
+const collectSelectedLineNumbers = (state: EditorState): number[] => {
+  const lineNumbers = new Set<number>()
+
+  for (const range of state.selection.ranges) {
+    const startLine = state.doc.lineAt(range.from).number
+    const endAnchor = range.to > range.from ? range.to - 1 : range.to
+    const endLine = state.doc.lineAt(endAnchor).number
+    for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+      lineNumbers.add(lineNumber)
+    }
+  }
+
+  return [...lineNumbers].sort((a, b) => a - b)
+}
+
+const toggleLineComments = (view: EditorView): void => {
+  const lineNumbers = collectSelectedLineNumbers(view.state)
+  if (lineNumbers.length === 0) return
+
+  const lineInfos = lineNumbers.map((lineNumber) => view.state.doc.line(lineNumber))
+  const nonEmptyLines = lineInfos.filter((line) => line.text.trim().length > 0)
+
+  const allCommented =
+    nonEmptyLines.length > 0 &&
+    nonEmptyLines.every((line) => /^\s*'/.test(line.text))
+
+  const changes = lineInfos
+    .map((line) => {
+      if (allCommented) {
+        const match = /^(\s*)' ?/.exec(line.text)
+        if (!match) return null
+        const from = line.from + match[1].length
+        return {
+          from,
+          to: from + (match[0].length - match[1].length),
+          insert: "",
+        }
+      }
+
+      return {
+        from: line.from,
+        insert: "' ",
+      }
+    })
+    .filter((change): change is { from: number; to?: number; insert: string } =>
+      change !== null
+    )
+
+  if (changes.length === 0) return
+  view.dispatch({ changes })
+}
+
 export const Editor = (props: {
   value: string
   onChange: (newValue: string) => void
   extensions?: Extension[]
   onViewReady?: (view: EditorView) => void
   onTemplateTrigger?: () => void
+  onPasteTransform?: (pastedText: string) => string | null
 }) => {
   let el: HTMLDivElement | undefined
   const [getView, setView] = createSignal<EditorView | undefined>()
@@ -33,6 +86,43 @@ export const Editor = (props: {
       props.onChange(value)
     })
 
+    const applyPasteTransform = (
+      event: ClipboardEvent,
+      view: EditorView
+    ): boolean => {
+      if (!props.onPasteTransform || event.defaultPrevented) return false
+
+      const pastedText = event.clipboardData?.getData("text/plain")
+      if (!pastedText) return false
+
+      const transformedText = props.onPasteTransform(pastedText)
+      if (typeof transformedText !== "string") {
+        return false
+      }
+
+      if (transformedText === pastedText) {
+        return false
+      }
+
+      const selection = view.state.selection.main
+      view.dispatch({
+        changes: {
+          from: selection.from,
+          to: selection.to,
+          insert: transformedText,
+        },
+        selection: {
+          anchor: selection.from + transformedText.length,
+        },
+        scrollIntoView: true,
+      })
+      event.preventDefault()
+      return true
+    }
+
+    const pasteEventExtension = EditorView.domEventHandlers({
+      paste: (event, view) => applyPasteTransform(event, view),
+    })
     const createView = () => {
       const view = new EditorView({
         parent: el,
@@ -42,6 +132,7 @@ export const Editor = (props: {
             isDarkMode() ? githubDark : githubLight,
             basicSetup,
             handleUpdate,
+            pasteEventExtension,
             EditorView.lineWrapping,
             ...(props.extensions || []),
           ],
@@ -66,6 +157,16 @@ export const Editor = (props: {
       }
 
       const handleTemplateTriggerKeyDown = (event: KeyboardEvent) => {
+        if (
+          event.key === "/" &&
+          (event.metaKey || event.ctrlKey) &&
+          !event.altKey
+        ) {
+          event.preventDefault()
+          toggleLineComments(view)
+          return
+        }
+
         if (!props.onTemplateTrigger) return
         if (event.defaultPrevented) return
         if (event.key !== "/") return
@@ -88,13 +189,21 @@ export const Editor = (props: {
         props.onTemplateTrigger()
       }
 
+      const handlePaste = (event: ClipboardEvent) => {
+        applyPasteTransform(event, view)
+      }
+
       view.dom.addEventListener("mousedown", handleGutterMouseDown)
       view.dom.addEventListener("keydown", handleTemplateTriggerKeyDown)
+      view.dom.addEventListener("paste", handlePaste, true)
+      view.contentDOM.addEventListener("paste", handlePaste, true)
       props.onViewReady?.(view)
 
       onCleanup(() => {
         view.dom.removeEventListener("mousedown", handleGutterMouseDown)
         view.dom.removeEventListener("keydown", handleTemplateTriggerKeyDown)
+        view.dom.removeEventListener("paste", handlePaste, true)
+        view.contentDOM.removeEventListener("paste", handlePaste, true)
       })
 
       return view

@@ -21,6 +21,7 @@ import {
 import {
   BasicCommandModal,
   LineJumpModal,
+  ShortcutCheatSheetModal,
 } from "../components/Modal"
 import { languages } from "../lib/languages"
 import { debounce } from "../lib/utils"
@@ -28,8 +29,10 @@ import { actions, state } from "../store"
 import { Button } from "../components/Button"
 import { timeago } from "../lib/date"
 import { BasicRunnerCanvas } from "../components/BasicRunnerCanvas"
+import { analyzeLegacyBasicPasteMigration } from "../basic/blockly-model"
 
 type SnippetMainMode = "play" | "code" | "build"
+type SnippetEditorMode = "code" | "build"
 
 export const Snippets = () => {
   const goto = useNavigate()
@@ -38,6 +41,8 @@ export const Snippets = () => {
   const [getOpenBasicCommandModal, setOpenBasicCommandModal] =
     createSignal(false)
   const [getOpenLineJumpModal, setOpenLineJumpModal] = createSignal(false)
+  const [getOpenShortcutCheatSheet, setOpenShortcutCheatSheet] =
+    createSignal(false)
   const [getSearchType, setSearchType] = createSignal<"non-trash" | "trash">(
     "non-trash"
   )
@@ -60,6 +65,8 @@ export const Snippets = () => {
   >(null)
   const [getIsTrashDropTarget, setIsTrashDropTarget] = createSignal(false)
   const [getMainMode, setMainMode] = createSignal<SnippetMainMode>("code")
+  const [getLastEditorMode, setLastEditorMode] =
+    createSignal<SnippetEditorMode>(state.app.defaultEditor)
   const [getPlayRunVersion, setPlayRunVersion] = createSignal(0)
   const [getPendingBuildInsert, setPendingBuildInsert] =
     createSignal<BasicBlocklyPendingInsert | null>(null)
@@ -80,6 +87,7 @@ export const Snippets = () => {
   let nextBuildHistoryActionId = 0
   let handledTrashDropForCurrentDrag = false
   let suppressTrashButtonClick = false
+  let dragPreviewEl: HTMLElement | null = null
 
   const snippets = createMemo(() => {
     const keyword = getSearchKeyword().toLowerCase()
@@ -157,8 +165,16 @@ export const Snippets = () => {
   const isPlayMode = createMemo(() => getMainMode() === "play")
   const isBuildMode = createMemo(() => getMainMode() === "build")
 
+  const setEditorMode = (mode: SnippetEditorMode) => {
+    setLastEditorMode(mode)
+    setMainMode(mode)
+  }
+
   const runInPlayMode = () => {
     if (!isBasicSnippet()) return
+    if (getMainMode() !== "play") {
+      setLastEditorMode(isBuildMode() ? "build" : "code")
+    }
     setMainMode("play")
     setPlayRunVersion((version) => version + 1)
   }
@@ -184,6 +200,7 @@ export const Snippets = () => {
     setSearchType("non-trash")
     setInlineRenameSnippetId(id)
     setInlineRenameValue("Untitled")
+    setLastEditorMode(state.app.defaultEditor)
     setMainMode(state.app.defaultEditor)
     goto(`/scripts?${new URLSearchParams({ id }).toString()}`)
   }
@@ -231,10 +248,23 @@ export const Snippets = () => {
   }
 
   const resetTrashDragState = () => {
+    document.body.classList.remove("snippet-drag-active")
+    if (dragPreviewEl) {
+      dragPreviewEl.remove()
+      dragPreviewEl = null
+    }
     setDraggedSnippetId(null)
     setTrashDropSnippetId(null)
     setIsTrashDropTarget(false)
   }
+
+  onCleanup(() => {
+    document.body.classList.remove("snippet-drag-active")
+    if (dragPreviewEl) {
+      dragPreviewEl.remove()
+      dragPreviewEl = null
+    }
+  })
 
   const armTrashButtonClickSuppression = () => {
     suppressTrashButtonClick = true
@@ -282,13 +312,32 @@ export const Snippets = () => {
 
     handledTrashDropForCurrentDrag = false
     suppressTrashButtonClick = false
+    document.body.classList.add("snippet-drag-active")
     setTrashDropSnippetId(null)
     setIsTrashDropTarget(false)
     setDraggedSnippetId(snippetId)
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move"
+      e.dataTransfer.dropEffect = "move"
       e.dataTransfer.setData("application/x-gamenotepad-script-id", snippetId)
       e.dataTransfer.setData("text/plain", snippetId)
+
+      if (dragPreviewEl) {
+        dragPreviewEl.remove()
+      }
+      dragPreviewEl = e.currentTarget.cloneNode(true) as HTMLElement
+      dragPreviewEl.style.position = "fixed"
+      dragPreviewEl.style.top = "-9999px"
+      dragPreviewEl.style.left = "-9999px"
+      dragPreviewEl.style.width = `${e.currentTarget.offsetWidth}px`
+      dragPreviewEl.style.pointerEvents = "none"
+      dragPreviewEl.style.opacity = "0.92"
+      document.body.appendChild(dragPreviewEl)
+      e.dataTransfer.setDragImage(dragPreviewEl, 14, 14)
+      window.setTimeout(() => {
+        dragPreviewEl?.remove()
+        dragPreviewEl = null
+      }, 0)
     }
   }
 
@@ -369,6 +418,14 @@ export const Snippets = () => {
     }
   }
 
+  const handleSnippetDragOver = (e: DragEvent & { currentTarget: HTMLElement }) => {
+    if (!getDraggedSnippetId()) return
+    e.preventDefault()
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = "move"
+    }
+  }
+
   const toggleTrashFilter = () => {
     if (getSearchType() === "trash") {
       setSearchType("non-trash")
@@ -407,15 +464,36 @@ export const Snippets = () => {
   }, 250)
 
   const handleEditorChange = (value: string) => {
-    if (value === content()) return
-
     const currentSnippet = snippet()
     if (!currentSnippet) return
 
-    setContent(value)
+    const normalizedValue = isBasicSnippet() ? value.toUpperCase() : value
+    if (normalizedValue === content()) return
+
+    setContent(normalizedValue)
     setIsContentDirty(true)
     latestContentRevision += 1
-    persistEditorChange(currentSnippet.id, value, latestContentRevision)
+    persistEditorChange(
+      currentSnippet.id,
+      normalizedValue,
+      latestContentRevision
+    )
+  }
+
+  const transformPastedBasicSource = (pastedText: string): string | null => {
+    if (!isBasicSnippet() || isBuildMode()) {
+      return null
+    }
+
+    const migration = analyzeLegacyBasicPasteMigration(pastedText)
+    if (!migration.shouldOfferMigration) {
+      return null
+    }
+
+    const shouldMigrate = window.confirm(
+      "Detected legacy numbered BASIC lines. Convert and remap line references for GameNotepad?"
+    )
+    return shouldMigrate ? migration.migratedSource : pastedText
   }
 
   const expandSnippetTemplate = (snippetTemplate: string): string => {
@@ -515,6 +593,12 @@ export const Snippets = () => {
     return (event.ctrlKey && event.shiftKey && key === "z") || (event.ctrlKey && key === "y")
   }
 
+  const isOpenShortcutCheatSheetShortcut = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.repeat) return false
+    if (event.metaKey || event.ctrlKey || event.altKey) return false
+    return event.key === "F1"
+  }
+
   const queueBuildHistoryAction = (type: "undo" | "redo") => {
     if (!isBasicSnippet() || !isBuildMode()) return
     nextBuildHistoryActionId += 1
@@ -584,6 +668,23 @@ export const Snippets = () => {
   createEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (
+        isOpenShortcutCheatSheetShortcut(event) &&
+        !shouldIgnoreDesignerShortcut(event)
+      ) {
+        event.preventDefault()
+        event.stopPropagation()
+        setOpenShortcutCheatSheet(true)
+        return
+      }
+
+      if (isPlayMode() && event.key === "Escape") {
+        event.preventDefault()
+        event.stopPropagation()
+        setMainMode(getLastEditorMode())
+        return
+      }
+
+      if (
         isBasicSnippet() &&
         isBuildMode() &&
         !shouldIgnoreDesignerShortcut(event)
@@ -631,6 +732,7 @@ export const Snippets = () => {
 
   createEffect(() => {
     if (!isBasicSnippet() && getMainMode() !== "code") {
+      setLastEditorMode("code")
       setMainMode("code")
     }
   })
@@ -760,7 +862,8 @@ export const Snippets = () => {
                     title="Show scripts in trash"
                     class="inline-flex items-center justify-center h-6 w-6 rounded-lg cursor active:ring-2 ring-blue-500 transition-colors"
                     classList={{
-                      "ring-2 ring-blue-500 bg-blue-500/10": getIsTrashDropTarget(),
+                      "ring-2 ring-blue-500 bg-blue-500/10":
+                        getIsTrashDropTarget() || Boolean(getDraggedSnippetId()),
                       "bg-blue-500 text-white": getSearchType() === "trash",
                       "hover:bg-zinc-200 dark:hover:text-white dark:hover:bg-zinc-600":
                         getSearchType() !== "trash",
@@ -808,8 +911,11 @@ export const Snippets = () => {
                     href={`/scripts?${new URLSearchParams({ id: snippet.id }).toString()}`}
                     draggable={getInlineRenameSnippetId() !== snippet.id}
                     classList={{
-                      "group text-sm px-2 block select-none rounded-lg py-1 cursor":
-                        true,
+                      "group text-sm px-2 block select-none rounded-lg py-1": true,
+                      "cursor-grab": getInlineRenameSnippetId() !== snippet.id,
+                      "cursor-grabbing":
+                        getInlineRenameSnippetId() !== snippet.id &&
+                        getDraggedSnippetId() === snippet.id,
                       "bg-blue-500": isSidebarSnippetActive(snippet.id),
                       "hover:bg-zinc-100 dark:hover:bg-zinc-600":
                         !isSidebarSnippetActive(snippet.id),
@@ -828,6 +934,7 @@ export const Snippets = () => {
                     }}
                     onDragStart={(e) => handleSnippetDragStart(e, snippet.id)}
                     onDragEnd={(e) => void handleSnippetDragEnd(e)}
+                    onDragOver={handleSnippetDragOver}
                   >
                     <Show
                       when={getInlineRenameSnippetId() === snippet.id}
@@ -960,7 +1067,7 @@ export const Snippets = () => {
                         "hover:bg-zinc-100 dark:hover:bg-zinc-700":
                           getMainMode() !== "code",
                       }}
-                      onClick={() => setMainMode("code")}
+                      onClick={() => setEditorMode("code")}
                     >
                       <span class="w-[1.1rem] h-[1.1rem] shrink-0 i-ic:outline-terminal"></span>
                     </button>
@@ -973,7 +1080,7 @@ export const Snippets = () => {
                         "hover:bg-zinc-100 dark:hover:bg-zinc-700":
                           !isBuildMode(),
                       }}
-                      onClick={() => setMainMode("build")}
+                      onClick={() => setEditorMode("build")}
                     >
                       <span class="w-[1.1rem] h-[1.1rem] shrink-0 i-ic:outline-extension"></span>
                     </button>
@@ -999,6 +1106,13 @@ export const Snippets = () => {
                     tooltip={{ content: "Insert BASIC command reference" }}
                   />
                 </Show>
+                <Button
+                  type="button"
+                  icon="i-ic:baseline-keyboard-command-key"
+                  iconClass="w-5 h-5"
+                  onClick={() => setOpenShortcutCheatSheet(true)}
+                  tooltip={{ content: "Keyboard shortcuts (F1)" }}
+                />
               </div>
             </div>
             <div
@@ -1010,53 +1124,73 @@ export const Snippets = () => {
               }}
             >
               <Show
-                when={isBasicSnippet() && isPlayMode()}
+                when={isBasicSnippet()}
                 fallback={
-                  <Show
-                    when={isBasicSnippet() && isBuildMode()}
-                    fallback={
-                      <Editor
-                        value={content()}
-                        onChange={handleEditorChange}
-                        onTemplateTrigger={() => setOpenBasicCommandModal(true)}
-                        onViewReady={(view) => {
-                          editorView = view
-                        }}
-                        extensions={editorExtensions()}
-                      />
-                    }
-                  >
-                    <BasicBlocklyEditor
-                      source={content()}
-                      onSourceChange={handleEditorChange}
-                      pendingInsert={getPendingBuildInsert()}
-                      onPendingInsertHandled={(id) => {
-                        if (getPendingBuildInsert()?.id === id) {
-                          setPendingBuildInsert(null)
-                        }
-                      }}
-                      pendingJump={getPendingBuildJump()}
-                      onPendingJumpHandled={(id) => {
-                        if (getPendingBuildJump()?.id === id) {
-                          setPendingBuildJump(null)
-                        }
-                      }}
-                      pendingHistoryAction={getPendingBuildHistoryAction()}
-                      onPendingHistoryActionHandled={(id) => {
-                        if (getPendingBuildHistoryAction()?.id === id) {
-                          setPendingBuildHistoryAction(null)
-                        }
-                      }}
-                    />
-                  </Show>
+                  <Editor
+                    value={content()}
+                    onChange={handleEditorChange}
+                    onTemplateTrigger={() => setOpenBasicCommandModal(true)}
+                    onPasteTransform={transformPastedBasicSource}
+                    onViewReady={(view) => {
+                      editorView = view
+                    }}
+                    extensions={editorExtensions()}
+                  />
                 }
               >
-                <BasicRunnerCanvas
-                  source={content()}
-                  snippetName={snippet()!.name}
-                  runVersion={getPlayRunVersion()}
-                  class="h-full w-full bg-black overflow-hidden flex items-center justify-center relative"
-                />
+                <div
+                  class="h-full w-full"
+                  classList={{ hidden: getMainMode() !== "code" }}
+                >
+                  <Editor
+                    value={content()}
+                    onChange={handleEditorChange}
+                    onTemplateTrigger={() => setOpenBasicCommandModal(true)}
+                    onPasteTransform={transformPastedBasicSource}
+                    onViewReady={(view) => {
+                      editorView = view
+                    }}
+                    extensions={editorExtensions()}
+                  />
+                </div>
+                <div
+                  class="h-full w-full"
+                  classList={{ hidden: !isBuildMode() }}
+                >
+                  <BasicBlocklyEditor
+                    source={content()}
+                    onSourceChange={handleEditorChange}
+                    pendingInsert={getPendingBuildInsert()}
+                    onPendingInsertHandled={(id) => {
+                      if (getPendingBuildInsert()?.id === id) {
+                        setPendingBuildInsert(null)
+                      }
+                    }}
+                    pendingJump={getPendingBuildJump()}
+                    onPendingJumpHandled={(id) => {
+                      if (getPendingBuildJump()?.id === id) {
+                        setPendingBuildJump(null)
+                      }
+                    }}
+                    pendingHistoryAction={getPendingBuildHistoryAction()}
+                    onPendingHistoryActionHandled={(id) => {
+                      if (getPendingBuildHistoryAction()?.id === id) {
+                        setPendingBuildHistoryAction(null)
+                      }
+                    }}
+                  />
+                </div>
+                <div
+                  class="h-full w-full"
+                  classList={{ hidden: !isPlayMode() }}
+                >
+                  <BasicRunnerCanvas
+                    source={content()}
+                    snippetName={snippet()!.name}
+                    runVersion={getPlayRunVersion()}
+                    class="h-full w-full bg-black overflow-hidden flex items-center justify-center relative"
+                  />
+                </div>
               </Show>
             </div>
           </div>
@@ -1073,6 +1207,11 @@ export const Snippets = () => {
         open={getOpenLineJumpModal()}
         setOpen={setOpenLineJumpModal}
         jumpToLine={jumpToBasicLine}
+      />
+      <ShortcutCheatSheetModal
+        open={getOpenShortcutCheatSheet()}
+        setOpen={setOpenShortcutCheatSheet}
+        isMac={state.isMac}
       />
       <div
         classList={{

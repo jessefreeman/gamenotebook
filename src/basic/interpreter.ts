@@ -34,6 +34,7 @@ type BasicHost = {
   requestInput: (prompt: string) => Promise<string>
   consumeKey: () => string | null
   onLog?: (message: string) => void
+  handlesInputEcho?: boolean
 }
 
 type BasicRuntimeSnapshot = {
@@ -482,6 +483,7 @@ export class BasicRuntime {
   private readonly variables = new Map<string, BasicValue>()
   private readonly arrays = new Map<string, BasicValue[]>()
   private readonly lineNumberIndex = new Map<number, number>()
+  private readonly memory = new Uint8Array(65_536)
   private readonly callStack: number[] = []
   private readonly forStack: ForFrame[] = []
   private program: ProgramLine[] = []
@@ -530,7 +532,12 @@ export class BasicRuntime {
       for (const statement of line.statements) {
         if (this.halted) break
         if (!statement.trim()) continue
-        await this.executeStatement(statement.trim())
+        try {
+          await this.executeStatement(statement.trim())
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          throw new Error(`LINE ${line.lineNumber}: ${message}`)
+        }
         if (this.nextIp !== null || this.halted) {
           break
         }
@@ -613,7 +620,18 @@ export class BasicRuntime {
 
   isFunction(name: string): boolean {
     const upper = normalizeName(name)
-    return ["ABS", "ASC", "CHR$", "INKEY$", "INT", "LEN", "RND", "STR$", "VAL"].includes(upper)
+    return [
+      "ABS",
+      "ASC",
+      "CHR$",
+      "INKEY$",
+      "INT",
+      "LEN",
+      "PEEK",
+      "RND",
+      "STR$",
+      "VAL",
+    ].includes(upper)
   }
 
   callFunction(name: string, args: BasicValue[]): BasicValue {
@@ -647,6 +665,9 @@ export class BasicRuntime {
     if (upper === "INKEY$") {
       return this.host.consumeKey() ?? ""
     }
+    if (upper === "PEEK") {
+      return this.peekMemory(this.toInteger(args[0] ?? 0))
+    }
     throw new Error(`Unknown function: ${name}`)
   }
 
@@ -654,6 +675,7 @@ export class BasicRuntime {
     this.variables.clear()
     this.arrays.clear()
     this.lineNumberIndex.clear()
+    this.memory.fill(0)
     this.callStack.length = 0
     this.forStack.length = 0
     this.program = []
@@ -705,7 +727,9 @@ export class BasicRuntime {
       }
       const existing = this.lineNumberIndex.get(line.legacyLineNumber)
       if (existing !== undefined && existing !== index) {
-        throw new Error(`Duplicate line number ${line.legacyLineNumber}`)
+        throw new Error(
+          `Duplicate line number ${line.legacyLineNumber} at line ${line.lineNumber}`
+        )
       }
       this.lineNumberIndex.set(line.legacyLineNumber, index)
     })
@@ -882,6 +906,18 @@ export class BasicRuntime {
       return
     }
 
+    const pokeTail = takeKeyword(statement, "POKE")
+    if (pokeTail !== null) {
+      const args = splitTopLevel(pokeTail, ",").map((part) => part.trim())
+      if (args.length < 2) {
+        throw new Error(`POKE requires 2 arguments: ${statement}`)
+      }
+      const address = this.toInteger(this.evalExpression(args[0]))
+      const value = this.toInteger(this.evalExpression(args[1]))
+      this.pokeMemory(address, value)
+      return
+    }
+
     if (startsWithKeyword(statement, "LET")) {
       const tail = takeKeyword(statement, "LET")
       if (tail !== null) {
@@ -995,10 +1031,15 @@ export class BasicRuntime {
       throw new Error(`INPUT missing variable target: ${tail}`)
     }
 
-    this.host.renderer.write(prompt)
+    if (!this.host.handlesInputEcho) {
+      this.host.renderer.write(prompt)
+    }
     const value = await this.host.requestInput(prompt)
-    this.host.renderer.printLine(value)
-    this.assignTarget(target, value)
+    const normalizedInput = this.toStringValue(value).toUpperCase()
+    if (!this.host.handlesInputEcho) {
+      this.host.renderer.printLine(normalizedInput)
+    }
+    this.assignTarget(target, normalizedInput)
   }
 
   private async handleIf(statement: string): Promise<void> {
@@ -1219,6 +1260,21 @@ export class BasicRuntime {
       i += 1
     }
     return -1
+  }
+
+  private normalizeMemoryAddress(address: number): number {
+    const size = this.memory.length
+    const normalized = Math.trunc(address) % size
+    return normalized < 0 ? normalized + size : normalized
+  }
+
+  private peekMemory(address: number): number {
+    return this.memory[this.normalizeMemoryAddress(address)]
+  }
+
+  private pokeMemory(address: number, value: number): void {
+    const normalizedAddress = this.normalizeMemoryAddress(address)
+    this.memory[normalizedAddress] = this.toInteger(value) & 0xff
   }
 }
 

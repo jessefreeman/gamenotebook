@@ -211,6 +211,15 @@ export const BASIC_COMMAND_ENTRIES: BasicCommandEntry[] = [
     searchTokens: ["dim", "array", "declare", "size"],
   },
   {
+    id: "stmt-poke",
+    kind: "statement",
+    label: "POKE",
+    syntax: "POKE address,value",
+    description: "Write a byte value (0-255) into memory.",
+    insertSnippet: "POKE ${1:address},${2:value}",
+    searchTokens: ["poke", "memory", "write", "byte"],
+  },
+  {
     id: "stmt-pset",
     kind: "statement",
     label: "PSET",
@@ -335,6 +344,15 @@ export const BASIC_COMMAND_ENTRIES: BasicCommandEntry[] = [
     description: "Length of string.",
     insertSnippet: "LEN(${1:str$})",
     searchTokens: ["len", "function", "string", "length"],
+  },
+  {
+    id: "fn-peek",
+    kind: "function",
+    label: "PEEK",
+    syntax: "PEEK(address)",
+    description: "Read a byte value (0-255) from memory.",
+    insertSnippet: "PEEK(${1:address})",
+    searchTokens: ["peek", "memory", "read", "byte", "function"],
   },
   {
     id: "fn-rnd-noarg",

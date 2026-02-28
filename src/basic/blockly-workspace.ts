@@ -58,6 +58,7 @@ const BLOCK_TYPE_BY_KIND: Record<BasicVisualStatementKind, string> = {
   for: FOR_BLOCK_TYPE,
   next: "basic_stmt_next",
   dim: "basic_stmt_dim",
+  poke: "basic_stmt_poke",
   pset: "basic_stmt_pset",
   line: "basic_stmt_line",
   rect: "basic_stmt_rect",
@@ -91,6 +92,7 @@ const STATEMENT_FIELD_KEYS: Record<BasicVisualStatementKind, string[]> = {
   for: ["variable", "start", "end", "step"],
   next: ["variable"],
   dim: ["declarations"],
+  poke: ["address", "value"],
   pset: ["x", "y", "color"],
   line: ["x1", "y1", "x2", "y2", "color"],
   rect: ["x", "y", "width", "height", "color"],
@@ -191,7 +193,7 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
     message0: "REM %1",
     args0: [
       {
-        type: "field_input",
+        type: "field_multilinetext",
         name: "TEXT",
         text: "comment",
       },
@@ -205,7 +207,7 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
     message0: "' %1",
     args0: [
       {
-        type: "field_input",
+        type: "field_multilinetext",
         name: "TEXT",
         text: "comment",
       },
@@ -285,7 +287,7 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
     message0: "PRINT %1",
     args0: [
       {
-        type: "field_input",
+        type: "field_multilinetext",
         name: "VALUE",
         text: "HELLO",
       },
@@ -299,7 +301,7 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
     message0: "INPUT %1",
     args0: [
       {
-        type: "field_input",
+        type: "field_multilinetext",
         name: "VALUE",
         text: "\"PROMPT\";A$",
       },
@@ -430,6 +432,25 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
         type: "field_input",
         name: "DECLARATIONS",
         text: "A(8)",
+      },
+    ],
+    previousStatement: null,
+    nextStatement: null,
+    colour: 200,
+  },
+  {
+    type: "basic_stmt_poke",
+    message0: "POKE addr %1 value %2",
+    args0: [
+      {
+        type: "field_input",
+        name: "ADDRESS",
+        text: "0",
+      },
+      {
+        type: "field_input",
+        name: "VALUE",
+        text: "0",
       },
     ],
     previousStatement: null,
@@ -571,7 +592,7 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
     message0: "RAW %1",
     args0: [
       {
-        type: "field_input",
+        type: "field_multilinetext",
         name: "CODE",
         text: "REM custom statement",
       },
@@ -668,7 +689,7 @@ const ensureScriptEntryBlock = (workspace: Blockly.WorkspaceSvg): Blockly.Block 
 }
 
 const DETACHED_STATEMENT_PREFIX =
-  /^(END|STOP|CLS|COLOR|LOCATE|PRINT|INPUT|IF|GOTO|GOSUB|RETURN|FOR|NEXT|DIM|PSET|LINE|RECT|LET)\b/i
+  /^(END|STOP|CLS|COLOR|LOCATE|PRINT|INPUT|IF|GOTO|GOSUB|RETURN|FOR|NEXT|DIM|POKE|PSET|LINE|RECT|LET)\b/i
 const DETACHED_ASSIGNMENT_PREFIX = /^[A-Z][A-Z0-9_$]*(\([^)]*\))?\s*=/i
 const normalizeJumpTarget = (value: string): string =>
   value.trim().replace(/^#\s*/, "")
@@ -787,14 +808,14 @@ const readVisualLineFromBlock = (block: Blockly.Block): BasicVisualLine | null =
     STATEMENT_FIELD_KEYS[kind].map((fieldName) => {
       const blockFieldName = toBlockFieldName(kind, fieldName)
       const value = block.getFieldValue(blockFieldName)
-      const text = typeof value === "string" ? value : ""
+      const normalizedText = typeof value === "string" ? value : ""
       if (
         fieldName === "line" &&
         (kind === "goto" || kind === "gosub")
       ) {
-        return [fieldName, normalizeJumpTarget(text)]
+        return [fieldName, normalizeJumpTarget(normalizedText)]
       }
-      return [fieldName, text]
+      return [fieldName, normalizedText]
     })
   )
 

@@ -283,6 +283,85 @@ export const LineJumpModal = (props: {
   )
 }
 
+type ShortcutEntry = {
+  action: string
+  mac: string
+  windows: string
+  notes?: string
+}
+
+const SHORTCUT_CHEAT_SHEET: ShortcutEntry[] = [
+  {
+    action: "Run BASIC in Play",
+    mac: "Cmd + Enter",
+    windows: "Ctrl + Enter",
+  },
+  {
+    action: "Exit Play back to editor",
+    mac: "Esc",
+    windows: "Esc",
+  },
+  {
+    action: "Toggle comment for line/selection",
+    mac: "Cmd + /",
+    windows: "Ctrl + /",
+  },
+  {
+    action: "Undo",
+    mac: "Cmd + Z",
+    windows: "Ctrl + Z",
+  },
+  {
+    action: "Redo",
+    mac: "Shift + Cmd + Z",
+    windows: "Ctrl + Shift + Z / Ctrl + Y",
+  },
+  {
+    action: "Add next matching selection",
+    mac: "Cmd + D",
+    windows: "Ctrl + D",
+    notes: "Works on selected text in the code editor.",
+  },
+  {
+    action: "Open shortcuts",
+    mac: "F1",
+    windows: "F1",
+  },
+]
+
+export const ShortcutCheatSheetModal = (props: {
+  open: boolean
+  setOpen: (open: boolean) => void
+  isMac: boolean
+}) => {
+  return (
+    <Show when={props.open}>
+      <Modal close={() => props.setOpen(false)}>
+        <div class="px-3 py-2 border-b text-sm font-semibold">
+          Keyboard shortcuts
+        </div>
+        <div class="max-h-[420px] overflow-y-auto">
+          <For each={SHORTCUT_CHEAT_SHEET}>
+            {(entry) => (
+              <div class="px-3 py-2 border-b border-zinc-100 dark:border-zinc-700">
+                <div class="text-sm">{entry.action}</div>
+                <div class="text-xs text-zinc-500 dark:text-zinc-400">
+                  {props.isMac ? entry.mac : entry.windows}
+                </div>
+                <Show when={entry.notes}>
+                  <div class="text-[11px] text-zinc-500 dark:text-zinc-400">
+                    {entry.notes}
+                  </div>
+                </Show>
+              </div>
+            )}
+          </For>
+        </div>
+      </Modal>
+    </Show>
+  )
+}
+
 export const FolderHistoryModal = (props: {
   open: boolean
   setOpen: (open: boolean) => void

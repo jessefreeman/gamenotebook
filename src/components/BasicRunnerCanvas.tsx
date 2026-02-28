@@ -11,16 +11,44 @@ export const BasicRunnerCanvas = (props: {
   class?: string
   setDocumentTitle?: boolean
 }) => {
-  const [getWaitingPrompt, setWaitingPrompt] = createSignal<string | null>(null)
-  const [getInputValue, setInputValue] = createSignal("")
+  const [getWaitingForInput, setWaitingForInput] = createSignal(false)
+  const [getInputCursorStyle, setInputCursorStyle] = createSignal<string | null>(
+    null
+  )
   const [getRuntimeReady, setRuntimeReady] = createSignal(false)
 
+  let hostEl: HTMLDivElement | undefined
   let canvasEl: HTMLCanvasElement | undefined
-  let inputEl: HTMLInputElement | undefined
   let renderer: PixelTextRenderer | null = null
   let runtime: BasicRuntime | null = null
   let pendingInputResolve: ((value: string) => void) | null = null
+  let pendingInputValue = ""
   const keyQueue: string[] = []
+
+  const updateInputCursorStyle = () => {
+    if (
+      !renderer ||
+      !hostEl ||
+      !canvasEl ||
+      !pendingInputResolve ||
+      !getWaitingForInput()
+    ) {
+      setInputCursorStyle(null)
+      return
+    }
+
+    const hostRect = hostEl.getBoundingClientRect()
+    const canvasRect = canvasEl.getBoundingClientRect()
+    const cursor = renderer.getCursor()
+    const cellWidth = canvasRect.width / renderer.cols
+    const cellHeight = canvasRect.height / renderer.rows
+    const left = canvasRect.left - hostRect.left + cursor.col * cellWidth
+    const top = canvasRect.top - hostRect.top + cursor.row * cellHeight
+
+    setInputCursorStyle(
+      `left:${left}px;top:${top}px;width:${cellWidth}px;height:${cellHeight}px;`
+    )
+  }
 
   const stopRuntime = () => {
     runtime?.stop()
@@ -29,41 +57,35 @@ export const BasicRunnerCanvas = (props: {
       pendingInputResolve("")
       pendingInputResolve = null
     }
-    setWaitingPrompt(null)
-    setInputValue("")
-  }
-
-  const submitInput = (event: SubmitEvent) => {
-    event.preventDefault()
-    if (!pendingInputResolve) return
-
-    pendingInputResolve(getInputValue())
-    pendingInputResolve = null
-    setWaitingPrompt(null)
-    setInputValue("")
+    pendingInputValue = ""
+    setWaitingForInput(false)
+    setInputCursorStyle(null)
   }
 
   const runSource = async () => {
     if (!renderer) return
+    const activeRenderer = renderer
 
     stopRuntime()
 
     const localRuntime = new BasicRuntime({
-      renderer,
+      renderer: activeRenderer,
       requestInput: (prompt: string) => {
-        setWaitingPrompt(prompt)
-        setInputValue("")
+        activeRenderer.write(prompt)
+        pendingInputValue = ""
+        setWaitingForInput(true)
         return new Promise<string>((resolve) => {
           pendingInputResolve = resolve
-          globalThis.setTimeout(() => inputEl?.focus(), 0)
+          updateInputCursorStyle()
         })
       },
       consumeKey: () => keyQueue.shift() ?? null,
+      handlesInputEcho: true,
     })
 
     runtime = localRuntime
-    renderer.clear(0)
-    renderer.setColor(7, 0)
+    activeRenderer.clear(0)
+    activeRenderer.setColor(7, 0)
 
     try {
       await localRuntime.run(props.source)
@@ -79,8 +101,9 @@ export const BasicRunnerCanvas = (props: {
         pendingInputResolve("")
         pendingInputResolve = null
       }
-      setWaitingPrompt(null)
-      setInputValue("")
+      pendingInputValue = ""
+      setWaitingForInput(false)
+      setInputCursorStyle(null)
     }
 
     if (props.setDocumentTitle) {
@@ -105,9 +128,47 @@ export const BasicRunnerCanvas = (props: {
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (getWaitingPrompt()) return
+      if (event.isComposing) return
+      if (pendingInputResolve) {
+        if (event.metaKey || event.ctrlKey || event.altKey) {
+          return
+        }
+
+        if (event.key === "Enter") {
+          event.preventDefault()
+          renderer?.newLine()
+          const resolve = pendingInputResolve
+          pendingInputResolve = null
+          const value = pendingInputValue.toUpperCase()
+          pendingInputValue = ""
+          setWaitingForInput(false)
+          setInputCursorStyle(null)
+          resolve(value)
+          return
+        }
+
+        if (event.key === "Backspace") {
+          event.preventDefault()
+          if (pendingInputValue.length > 0) {
+            pendingInputValue = pendingInputValue.slice(0, -1)
+            renderer?.backspace()
+            updateInputCursorStyle()
+          }
+          return
+        }
+
+        if (event.key.length === 1) {
+          event.preventDefault()
+          const nextChar = event.key.toUpperCase()
+          pendingInputValue += nextChar
+          renderer?.write(nextChar)
+          updateInputCursorStyle()
+        }
+        return
+      }
+
       if (event.key.length === 1) {
-        keyQueue.push(event.key)
+        keyQueue.push(event.key.toUpperCase())
       } else if (event.key === "Enter") {
         keyQueue.push("\n")
       } else if (event.key === "Backspace") {
@@ -115,9 +176,15 @@ export const BasicRunnerCanvas = (props: {
       }
     }
 
+    const handleResize = () => {
+      updateInputCursorStyle()
+    }
+
     window.addEventListener("keydown", handleKeyDown)
+    window.addEventListener("resize", handleResize)
     onCleanup(() => {
       window.removeEventListener("keydown", handleKeyDown)
+      window.removeEventListener("resize", handleResize)
       stopRuntime()
     })
   })
@@ -134,6 +201,7 @@ export const BasicRunnerCanvas = (props: {
         props.class ||
         "h-full w-full bg-black overflow-hidden flex items-center justify-center relative"
       }
+      ref={hostEl}
     >
       <canvas
         ref={canvasEl}
@@ -142,25 +210,11 @@ export const BasicRunnerCanvas = (props: {
         style="width:min(100%, calc(100vh * 256 / 240));height:min(100%, calc(100vw * 240 / 256));max-height:100%;image-rendering:pixelated;"
       />
 
-      <Show when={getWaitingPrompt()}>
-        <form
-          onSubmit={submitInput}
-          class="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/90 border border-white/20 rounded px-3 py-2 flex items-center gap-2 text-xs text-white w-[min(92vw,520px)]"
-        >
-          <label class="shrink-0 truncate max-w-[45%]">{getWaitingPrompt()}</label>
-          <input
-            ref={inputEl}
-            value={getInputValue()}
-            onInput={(event) => setInputValue(event.currentTarget.value)}
-            class="flex-1 bg-black border border-white/30 rounded px-2 py-1 outline-none"
-          />
-          <button
-            type="submit"
-            class="border border-white/40 rounded px-2 py-1 uppercase tracking-wide"
-          >
-            Enter
-          </button>
-        </form>
+      <Show when={getInputCursorStyle() && getWaitingForInput()}>
+        <div
+          class="basic-input-cursor absolute pointer-events-none bg-white/90"
+          style={getInputCursorStyle()!}
+        />
       </Show>
     </div>
   )

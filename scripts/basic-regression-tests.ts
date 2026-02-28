@@ -267,6 +267,51 @@ RETURN`,
     debugRows: 8,
   },
   {
+    name: "Runtime errors include source line context",
+    scenario: {
+      source: `PRINT "A"
+GOTO 300
+END`,
+    },
+    expectation: {
+      error: /LINE 2: Unknown line number 300/,
+    },
+    debugRows: 4,
+  },
+  {
+    name: "INPUT values normalize to uppercase",
+    scenario: {
+      source: `INPUT "NAME";N$
+PRINT N$
+END`,
+      inputs: ["ada"],
+    },
+    expectation: {
+      error: null,
+      rows: [
+        { row: 0, startsWith: "NAME ADA" },
+        { row: 1, startsWith: "ADA" },
+      ],
+      variables: {
+        "N$": "ADA",
+      },
+    },
+    debugRows: 4,
+  },
+  {
+    name: "PEEK and POKE roundtrip memory bytes",
+    scenario: {
+      source: `POKE 4096,65
+PRINT CHR$(PEEK(4096))
+END`,
+    },
+    expectation: {
+      error: null,
+      rows: [{ row: 0, startsWith: "A" }],
+    },
+    debugRows: 4,
+  },
+  {
     name: "PSET plots explicit pixel color",
     scenario: {
       source: `CLS

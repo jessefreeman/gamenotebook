@@ -15,6 +15,7 @@ export type BasicVisualStatementKind =
   | "for"
   | "next"
   | "dim"
+  | "poke"
   | "pset"
   | "line"
   | "rect"
@@ -454,6 +455,18 @@ export const parseBasicStatementToVisual = (
     return makeStatement("dim", { declarations: trimmed.slice(3).trim() })
   }
 
+  const pokeTail = takeKeyword(trimmed, "POKE")
+  if (pokeTail !== null) {
+    const args = parseArgList(pokeTail)
+    if (args.length < 2) {
+      return makeStatement("raw", { code: trimmed })
+    }
+    return makeStatement("poke", {
+      address: args[0] ?? "",
+      value: args[1] ?? "",
+    })
+  }
+
   const psetTail = takeKeyword(trimmed, "PSET")
   if (psetTail !== null) {
     const args = parseArgList(psetTail)
@@ -607,6 +620,12 @@ export const emitBasicStatementFromVisual = (
     return `DIM ${field("declarations", "A(8)")}`
   }
 
+  if (statement.kind === "poke") {
+    const address = field("address", "0")
+    const value = field("value", "0")
+    return `POKE ${emitArgs(address, value)}`
+  }
+
   if (statement.kind === "pset") {
     const x = field("x", "0")
     const y = field("y", "0")
@@ -700,4 +719,251 @@ export const emitBasicSourceFromVisualLines = (
     })
     .filter((line) => line.length > 0)
     .join("\n")
+}
+
+const LEGACY_LINE_PREFIX = /^\s*(\d+)\s*(.*)$/
+
+type ParsedLegacyLine = {
+  legacyLineNumber: null | string
+  body: string
+}
+
+type ParsedLegacySource = {
+  lines: ParsedLegacyLine[]
+  numberedLineCount: number
+  sawArrowArtifact: boolean
+}
+
+const decodeEscapedLineBreaks = (source: string): string =>
+  source
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\n")
+
+const findArrowSeparator = (text: string): number => {
+  let inString = false
+
+  for (let index = 0; index < text.length - 1; index += 1) {
+    const char = text[index]
+    if (char === "\"") {
+      if (inString && text[index + 1] === "\"") {
+        index += 1
+        continue
+      }
+      inString = !inString
+      continue
+    }
+
+    if (inString) continue
+    if (char === "-" && text[index + 1] === ">") {
+      return index
+    }
+  }
+
+  return -1
+}
+
+const parseLegacySource = (source: string): ParsedLegacySource => {
+  let sawArrowArtifact = false
+
+  const lines = source.split("\n").map((line) => {
+    const arrowIndex = findArrowSeparator(line)
+    const cleanedLine =
+      arrowIndex >= 0 ? line.slice(0, arrowIndex).trimEnd() : line
+    if (arrowIndex >= 0) {
+      sawArrowArtifact = true
+    }
+
+    const match = LEGACY_LINE_PREFIX.exec(cleanedLine)
+    if (!match) {
+      return {
+        legacyLineNumber: null,
+        body: cleanedLine,
+      }
+    }
+
+    return {
+      legacyLineNumber: match[1],
+      body: match[2] ?? "",
+    }
+  })
+
+  const numberedLineCount = lines.filter(
+    (line) => line.legacyLineNumber !== null
+  ).length
+
+  return {
+    lines,
+    numberedLineCount,
+    sawArrowArtifact,
+  }
+}
+
+const selectBestMigrationInput = (source: string) => {
+  const normalized = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+  const decoded = decodeEscapedLineBreaks(normalized)
+  const normalizedParsed = parseLegacySource(normalized)
+  const decodedParsed =
+    decoded === normalized ? normalizedParsed : parseLegacySource(decoded)
+
+  const useDecoded =
+    decoded !== normalized &&
+    decodedParsed.numberedLineCount > normalizedParsed.numberedLineCount
+
+  return useDecoded
+    ? {
+        normalizedSource: decoded,
+        parsed: decodedParsed,
+      }
+    : {
+        normalizedSource: normalized,
+        parsed: normalizedParsed,
+      }
+}
+
+const remapStandaloneJumpToken = (
+  token: string,
+  legacyToVisualLineNumber: Map<string, string>
+): string => {
+  const trimmed = token.trim()
+  if (!trimmed) return trimmed
+
+  const hasHashPrefix = trimmed.startsWith("#")
+  const rawLineNumber = hasHashPrefix ? trimmed.slice(1).trim() : trimmed
+  if (!/^\d+$/.test(rawLineNumber)) {
+    return trimmed
+  }
+
+  const mappedLineNumber = legacyToVisualLineNumber.get(rawLineNumber)
+  if (!mappedLineNumber) {
+    return trimmed
+  }
+
+  return hasHashPrefix ? `#${mappedLineNumber}` : mappedLineNumber
+}
+
+const remapIfBranchTargets = (
+  value: string,
+  legacyToVisualLineNumber: Map<string, string>
+): string => {
+  return splitTopLevel(value, ":")
+    .map((statement) =>
+      remapStandaloneJumpToken(statement, legacyToVisualLineNumber)
+    )
+    .join(":")
+}
+
+const remapJumpStatementLine = (
+  line: string,
+  legacyToVisualLineNumber: Map<string, string>
+): string => {
+  const remapStatement = (statement: string): string => {
+    const trimmed = statement.trim()
+    if (!trimmed) return trimmed
+
+    const gotoTail = takeKeyword(trimmed, "GOTO")
+    if (gotoTail !== null) {
+      const remappedTarget = remapStandaloneJumpToken(
+        gotoTail,
+        legacyToVisualLineNumber
+      )
+      return remappedTarget !== gotoTail.trim()
+        ? `GOTO ${remappedTarget}`
+        : trimmed
+    }
+
+    const gosubTail = takeKeyword(trimmed, "GOSUB")
+    if (gosubTail !== null) {
+      const remappedTarget = remapStandaloneJumpToken(
+        gosubTail,
+        legacyToVisualLineNumber
+      )
+      return remappedTarget !== gosubTail.trim()
+        ? `GOSUB ${remappedTarget}`
+        : trimmed
+    }
+
+    if (startsWithKeyword(trimmed, "IF")) {
+      const ifTail = trimmed.slice(2).trim()
+      const thenIndex = findTopLevelKeyword(ifTail, "THEN")
+      if (thenIndex < 0) return trimmed
+
+      const condition = ifTail.slice(0, thenIndex).trim()
+      const thenElsePart = ifTail.slice(thenIndex + 4).trim()
+      const elseIndex = findTopLevelKeyword(thenElsePart, "ELSE")
+      const thenPart =
+        elseIndex >= 0 ? thenElsePart.slice(0, elseIndex).trim() : thenElsePart
+      const elsePart =
+        elseIndex >= 0 ? thenElsePart.slice(elseIndex + 4).trim() : ""
+
+      const remappedThen = remapIfBranchTargets(
+        thenPart,
+        legacyToVisualLineNumber
+      )
+      const remappedElse = remapIfBranchTargets(
+        elsePart,
+        legacyToVisualLineNumber
+      )
+
+      return remappedElse
+        ? `IF ${condition} THEN ${remappedThen} ELSE ${remappedElse}`
+        : `IF ${condition} THEN ${remappedThen}`
+    }
+
+    return trimmed
+  }
+
+  return splitTopLevel(line, ":").map(remapStatement).join(":")
+}
+
+export const stripLegacyLineNumbersAndRemapJumps = (source: string): string => {
+  const { normalizedSource, parsed } = selectBestMigrationInput(source)
+  const hasTrailingNewline = normalizedSource.endsWith("\n")
+
+  const filteredLines =
+    parsed.sawArrowArtifact && parsed.numberedLineCount >= 2
+      ? parsed.lines.filter(
+          (line) => line.legacyLineNumber !== null || !line.body.trim()
+        )
+      : parsed.lines
+
+  const legacyToVisualLineNumber = new Map<string, string>()
+  filteredLines.forEach((line, index) => {
+    if (!line.legacyLineNumber || legacyToVisualLineNumber.has(line.legacyLineNumber)) {
+      return
+    }
+    legacyToVisualLineNumber.set(line.legacyLineNumber, String(index + 1))
+  })
+
+  if (legacyToVisualLineNumber.size === 0) {
+    return source
+  }
+
+  const nextLines = filteredLines.map((line) =>
+    remapJumpStatementLine(line.body, legacyToVisualLineNumber)
+  )
+  const result = nextLines.join("\n")
+  return hasTrailingNewline ? `${result}\n` : result
+}
+
+export const analyzeLegacyBasicPasteMigration = (
+  source: string
+): {
+  shouldOfferMigration: boolean
+  migratedSource: string
+  numberedLineCount: number
+  hasEscapedLineBreaks: boolean
+  hasArrowArtifact: boolean
+} => {
+  const { parsed } = selectBestMigrationInput(source)
+  const migratedSource = stripLegacyLineNumbersAndRemapJumps(source)
+  const hasEscapedLineBreaks = /\\r\\n|\\n|\\r/.test(source)
+  return {
+    shouldOfferMigration:
+      parsed.numberedLineCount >= 2 && migratedSource !== source,
+    migratedSource,
+    numberedLineCount: parsed.numberedLineCount,
+    hasEscapedLineBreaks,
+    hasArrowArtifact: parsed.sawArrowArtifact,
+  }
 }

@@ -39,6 +39,7 @@ export class PixelTextRenderer {
   private pendingWrap = false
   private fgColor = 7
   private bgColor = 0
+  private readonly chars: string[][]
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.canvas.width = this.width
@@ -50,6 +51,9 @@ export class PixelTextRenderer {
     }
     context.imageSmoothingEnabled = false
     this.ctx = context
+    this.chars = Array.from({ length: this.rows }, () =>
+      Array.from({ length: this.cols }, () => " ")
+    )
   }
 
   async init(fontUrl: string): Promise<void> {
@@ -65,6 +69,9 @@ export class PixelTextRenderer {
     this.cursorY = 0
     this.pendingWrap = false
     this.bgColor = this.normalizeColorIndex(colorIndex)
+    for (let row = 0; row < this.rows; row += 1) {
+      this.chars[row].fill(" ")
+    }
   }
 
   setColor(fgColor: number, bgColor: number = this.bgColor): void {
@@ -158,6 +165,37 @@ export class PixelTextRenderer {
     this.line(rx, ry + rh, rx + rw, ry + rh, color)
   }
 
+  getCursor(): { col: number; row: number } {
+    return {
+      col: this.cursorX,
+      row: this.cursorY,
+    }
+  }
+
+  getChar(col: number, row: number): string {
+    if (row < 0 || row >= this.rows || col < 0 || col >= this.cols) {
+      return " "
+    }
+    return this.chars[row][col] ?? " "
+  }
+
+  backspace(): void {
+    if (this.pendingWrap) {
+      this.pendingWrap = false
+    }
+
+    if (this.cursorX > 0) {
+      this.cursorX -= 1
+    } else if (this.cursorY > 0) {
+      this.cursorY -= 1
+      this.cursorX = this.cols - 1
+    } else {
+      return
+    }
+
+    this.clearCell(this.cursorX, this.cursorY)
+  }
+
   private drawChar(char: string): void {
     const code = stringToAsciiCode(char)
     const glyph = this.font.getGlyph(code)
@@ -166,6 +204,7 @@ export class PixelTextRenderer {
 
     this.ctx.fillStyle = this.resolveColor(this.bgColor)
     this.ctx.fillRect(dx, dy, this.charWidth, this.charHeight)
+    this.chars[this.cursorY][this.cursorX] = char
 
     if (!glyph) return
 
@@ -229,6 +268,18 @@ export class PixelTextRenderer {
     this.ctx.putImageData(imageData, 0, 0)
     this.ctx.fillStyle = this.resolveColor(this.bgColor)
     this.ctx.fillRect(0, this.height - this.charHeight, this.width, this.charHeight)
+    for (let row = 0; row < this.rows - 1; row += 1) {
+      this.chars[row] = [...this.chars[row + 1]]
+    }
+    this.chars[this.rows - 1].fill(" ")
+  }
+
+  private clearCell(col: number, row: number): void {
+    const dx = col * this.charWidth
+    const dy = row * this.charHeight
+    this.ctx.fillStyle = this.resolveColor(this.bgColor)
+    this.ctx.fillRect(dx, dy, this.charWidth, this.charHeight)
+    this.chars[row][col] = " "
   }
 
   private normalizeColorIndex(value: number): number {
