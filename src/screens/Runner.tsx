@@ -5,6 +5,7 @@ import {
   decodeRunnerPayload,
 } from "../basic/runner-payload"
 import { BasicRunnerCanvas } from "../components/BasicRunnerCanvas"
+import { state } from "../store"
 
 export const Runner = () => {
   const [getPayload, setPayload] = createSignal<BasicRunnerPayload | null>(null)
@@ -44,6 +45,7 @@ export const Runner = () => {
         source={getPayload()!.source}
         snippetName={getPayload()!.snippetName}
         runVersion={getRunVersion()}
+        paletteMode={state.app.playerPaletteMode}
         setDocumentTitle
         class="h-screen w-screen bg-black overflow-hidden flex items-center justify-center relative"
       />

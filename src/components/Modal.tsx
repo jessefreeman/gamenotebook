@@ -205,7 +205,7 @@ export const BasicCommandModal = (props: {
         if (terms.length === 0) return true
 
         const haystack = [entry.label, entry.syntax]
-          .concat(entry.searchTokens)
+          .concat(entry.searchTokens, entry.description)
           .join(" ")
           .toLowerCase()
 
@@ -214,8 +214,7 @@ export const BasicCommandModal = (props: {
       .map((entry: BasicCommandEntry) => {
         return {
           text: entry.label,
-          syntax: entry.syntax,
-          detail: `${entry.kind}: ${entry.description}`,
+          detail: entry.description,
           onClick() {
             props.insertCommandSnippet(entry.insertSnippet)
             props.setOpen(false)

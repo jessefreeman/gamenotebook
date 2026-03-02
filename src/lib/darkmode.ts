@@ -1,10 +1,11 @@
-import { createSignal, onCleanup, onMount } from "solid-js"
+import { createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { state } from "../store"
 
 export const useDarkMode = () => {
-  const [getDarkMode, setDarkMode] = createSignal(false)
+  const [getSystemDarkMode, setSystemDarkMode] = createSignal(false)
 
   const onChange = (e: MediaQueryListEvent | MediaQueryList) => {
-    setDarkMode(e.matches)
+    setSystemDarkMode(e.matches)
   }
 
   onMount(() => {
@@ -17,5 +18,9 @@ export const useDarkMode = () => {
     })
   })
 
-  return getDarkMode
+  return createMemo(() => {
+    if (state.app.themeMode === "dark") return true
+    if (state.app.themeMode === "light") return false
+    return getSystemDarkMode()
+  })
 }

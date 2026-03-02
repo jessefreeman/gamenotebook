@@ -1,6 +1,7 @@
 import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { BasicRuntime } from "../basic/interpreter"
 import { PixelTextRenderer } from "../basic/renderer"
+import type { PlayerPaletteMode } from "../lib/theme"
 
 const fontUrl = new URL("../../large.font.png", import.meta.url).href
 
@@ -10,6 +11,7 @@ export const BasicRunnerCanvas = (props: {
   runVersion: number
   class?: string
   setDocumentTitle?: boolean
+  paletteMode?: PlayerPaletteMode
 }) => {
   const [getWaitingForInput, setWaitingForInput] = createSignal(false)
   const [getInputCursorStyle, setInputCursorStyle] = createSignal<string | null>(
@@ -23,6 +25,7 @@ export const BasicRunnerCanvas = (props: {
   let runtime: BasicRuntime | null = null
   let pendingInputResolve: ((value: string) => void) | null = null
   let pendingInputValue = ""
+  let lastAppliedPaletteMode: PlayerPaletteMode | null = null
   const keyQueue: string[] = []
 
   const updateInputCursorStyle = () => {
@@ -114,7 +117,8 @@ export const BasicRunnerCanvas = (props: {
   onMount(async () => {
     if (!canvasEl) return
 
-    renderer = new PixelTextRenderer(canvasEl)
+    renderer = new PixelTextRenderer(canvasEl, { paletteMode: props.paletteMode })
+    lastAppliedPaletteMode = props.paletteMode || "default"
     try {
       await renderer.init(fontUrl)
       setRuntimeReady(true)
@@ -187,6 +191,16 @@ export const BasicRunnerCanvas = (props: {
       window.removeEventListener("resize", handleResize)
       stopRuntime()
     })
+  })
+
+  createEffect(() => {
+    const paletteMode = props.paletteMode || "default"
+    if (!renderer || !getRuntimeReady() || paletteMode === lastAppliedPaletteMode) {
+      return
+    }
+    lastAppliedPaletteMode = paletteMode
+    renderer.setPaletteMode(paletteMode)
+    void runSource()
   })
 
   createEffect(() => {

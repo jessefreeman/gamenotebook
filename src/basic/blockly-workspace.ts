@@ -287,9 +287,9 @@ const STATEMENT_BLOCK_DEFINITIONS: BlocklyBlockDefinition[] = [
     message0: "PRINT %1",
     args0: [
       {
-        type: "field_multilinetext",
+        type: "field_input",
         name: "VALUE",
-        text: "HELLO",
+        text: "\"HELLO\"",
       },
     ],
     previousStatement: null,

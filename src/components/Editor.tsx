@@ -75,6 +75,7 @@ export const Editor = (props: {
   onViewReady?: (view: EditorView) => void
   onTemplateTrigger?: () => void
   onPasteTransform?: (pastedText: string) => string | null
+  onFocusChange?: (focused: boolean) => void
 }) => {
   let el: HTMLDivElement | undefined
   const [getView, setView] = createSignal<EditorView | undefined>()
@@ -196,10 +197,22 @@ export const Editor = (props: {
       applyPasteTransform(event, view)
     }
 
+    const handleFocusIn = () => {
+      props.onFocusChange?.(true)
+    }
+
+    const handleFocusOut = () => {
+      window.setTimeout(() => {
+        props.onFocusChange?.(view.hasFocus)
+      }, 0)
+    }
+
     view.dom.addEventListener("mousedown", handleGutterMouseDown)
     view.dom.addEventListener("keydown", handleTemplateTriggerKeyDown)
     view.dom.addEventListener("paste", handlePaste, true)
     view.contentDOM.addEventListener("paste", handlePaste, true)
+    view.dom.addEventListener("focusin", handleFocusIn)
+    view.dom.addEventListener("focusout", handleFocusOut)
     props.onViewReady?.(view)
 
     onCleanup(() => {
@@ -207,6 +220,9 @@ export const Editor = (props: {
       view.dom.removeEventListener("keydown", handleTemplateTriggerKeyDown)
       view.dom.removeEventListener("paste", handlePaste, true)
       view.contentDOM.removeEventListener("paste", handlePaste, true)
+      view.dom.removeEventListener("focusin", handleFocusIn)
+      view.dom.removeEventListener("focusout", handleFocusOut)
+      props.onFocusChange?.(false)
       view.destroy()
     })
 
