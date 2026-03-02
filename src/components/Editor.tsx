@@ -1,5 +1,5 @@
 import { basicSetup, EditorView } from "codemirror"
-import { EditorState, type Extension } from "@codemirror/state"
+import { Compartment, EditorState, type Extension } from "@codemirror/state"
 import { createEffect, createSignal, onCleanup, onMount } from "solid-js"
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github"
 import { useDarkMode } from "../lib/darkmode"
@@ -79,9 +79,12 @@ export const Editor = (props: {
   let el: HTMLDivElement | undefined
   const [getView, setView] = createSignal<EditorView | undefined>()
   const isDarkMode = useDarkMode()
+  const themeCompartment = new Compartment()
+  const extensionCompartment = new Compartment()
 
   onMount(() => {
     const handleUpdate = EditorView.updateListener.of((update) => {
+      if (!update.docChanged) return
       const value = update.state.doc.toString()
       props.onChange(value)
     })
@@ -123,99 +126,88 @@ export const Editor = (props: {
     const pasteEventExtension = EditorView.domEventHandlers({
       paste: (event, view) => applyPasteTransform(event, view),
     })
-    const createView = () => {
-      const view = new EditorView({
-        parent: el,
-        state: EditorState.create({
-          doc: "",
-          extensions: [
-            isDarkMode() ? githubDark : githubLight,
-            basicSetup,
-            handleUpdate,
-            pasteEventExtension,
-            EditorView.lineWrapping,
-            ...(props.extensions || []),
-          ],
-        }),
+    const view = new EditorView({
+      parent: el,
+      state: EditorState.create({
+        doc: "",
+        extensions: [
+          themeCompartment.of(isDarkMode() ? githubDark : githubLight),
+          extensionCompartment.of(props.extensions || []),
+          basicSetup,
+          handleUpdate,
+          pasteEventExtension,
+          EditorView.lineWrapping,
+        ],
+      }),
+    })
+    setView(view)
+
+    const handleGutterMouseDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null
+      const lineElement = target?.closest(".cm-lineNumbers .cm-gutterElement")
+      if (!lineElement) return
+
+      const documentLineNumber = parseDocumentLineNumber(lineElement as HTMLElement)
+      if (!documentLineNumber) return
+
+      const line = view.state.doc.line(documentLineNumber)
+      view.dispatch({
+        selection: { anchor: line.from },
+        scrollIntoView: true,
       })
-
-      const handleGutterMouseDown = (event: MouseEvent) => {
-        const target = event.target as HTMLElement | null
-        const lineElement = target?.closest(".cm-lineNumbers .cm-gutterElement")
-        if (!lineElement) return
-
-        const documentLineNumber = parseDocumentLineNumber(lineElement as HTMLElement)
-        if (!documentLineNumber) return
-
-        const line = view.state.doc.line(documentLineNumber)
-        view.dispatch({
-          selection: { anchor: line.from },
-          scrollIntoView: true,
-        })
-        view.focus()
-        event.preventDefault()
-      }
-
-      const handleTemplateTriggerKeyDown = (event: KeyboardEvent) => {
-        if (
-          event.key === "/" &&
-          (event.metaKey || event.ctrlKey) &&
-          !event.altKey
-        ) {
-          event.preventDefault()
-          toggleLineComments(view)
-          return
-        }
-
-        if (!props.onTemplateTrigger) return
-        if (event.defaultPrevented) return
-        if (event.key !== "/") return
-        if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) {
-          return
-        }
-
-        const selection = view.state.selection.main
-        if (!selection.empty) return
-
-        const cursor = selection.from
-        if (cursor > 0) {
-          const prevChar = view.state.sliceDoc(cursor - 1, cursor)
-          if (!/\s/.test(prevChar)) {
-            return
-          }
-        }
-
-        event.preventDefault()
-        props.onTemplateTrigger()
-      }
-
-      const handlePaste = (event: ClipboardEvent) => {
-        applyPasteTransform(event, view)
-      }
-
-      view.dom.addEventListener("mousedown", handleGutterMouseDown)
-      view.dom.addEventListener("keydown", handleTemplateTriggerKeyDown)
-      view.dom.addEventListener("paste", handlePaste, true)
-      view.contentDOM.addEventListener("paste", handlePaste, true)
-      props.onViewReady?.(view)
-
-      onCleanup(() => {
-        view.dom.removeEventListener("mousedown", handleGutterMouseDown)
-        view.dom.removeEventListener("keydown", handleTemplateTriggerKeyDown)
-        view.dom.removeEventListener("paste", handlePaste, true)
-        view.contentDOM.removeEventListener("paste", handlePaste, true)
-      })
-
-      return view
+      view.focus()
+      event.preventDefault()
     }
 
-    createEffect(() => {
-      const view = createView()
-      setView(view)
+    const handleTemplateTriggerKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key === "/" &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey
+      ) {
+        event.preventDefault()
+        toggleLineComments(view)
+        return
+      }
 
-      onCleanup(() => {
-        view.destroy()
-      })
+      if (!props.onTemplateTrigger) return
+      if (event.defaultPrevented) return
+      if (event.key !== "/") return
+      if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) {
+        return
+      }
+
+      const selection = view.state.selection.main
+      if (!selection.empty) return
+
+      const cursor = selection.from
+      if (cursor > 0) {
+        const prevChar = view.state.sliceDoc(cursor - 1, cursor)
+        if (!/\s/.test(prevChar)) {
+          return
+        }
+      }
+
+      event.preventDefault()
+      props.onTemplateTrigger()
+    }
+
+    const handlePaste = (event: ClipboardEvent) => {
+      applyPasteTransform(event, view)
+    }
+
+    view.dom.addEventListener("mousedown", handleGutterMouseDown)
+    view.dom.addEventListener("keydown", handleTemplateTriggerKeyDown)
+    view.dom.addEventListener("paste", handlePaste, true)
+    view.contentDOM.addEventListener("paste", handlePaste, true)
+    props.onViewReady?.(view)
+
+    onCleanup(() => {
+      view.dom.removeEventListener("mousedown", handleGutterMouseDown)
+      view.dom.removeEventListener("keydown", handleTemplateTriggerKeyDown)
+      view.dom.removeEventListener("paste", handlePaste, true)
+      view.contentDOM.removeEventListener("paste", handlePaste, true)
+      view.destroy()
     })
 
     createEffect(() => {
@@ -235,6 +227,24 @@ export const Editor = (props: {
           view.focus()
         }
       }
+    })
+
+    createEffect(() => {
+      const view = getView()
+      if (!view) return
+      view.dispatch({
+        effects: themeCompartment.reconfigure(
+          isDarkMode() ? githubDark : githubLight
+        ),
+      })
+    })
+
+    createEffect(() => {
+      const view = getView()
+      if (!view) return
+      view.dispatch({
+        effects: extensionCompartment.reconfigure(props.extensions || []),
+      })
     })
   })
 
