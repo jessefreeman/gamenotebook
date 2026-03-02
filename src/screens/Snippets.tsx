@@ -27,7 +27,6 @@ import { languages } from "../lib/languages"
 import { debounce } from "../lib/utils"
 import { actions, state } from "../store"
 import { Button } from "../components/Button"
-import { timeago } from "../lib/date"
 import { BasicRunnerCanvas } from "../components/BasicRunnerCanvas"
 import { analyzeLegacyBasicPasteMigration } from "../basic/blockly-model"
 
@@ -74,6 +73,9 @@ export const Snippets = () => {
     createSignal<BasicBlocklyPendingJump | null>(null)
   const [getPendingBuildHistoryAction, setPendingBuildHistoryAction] =
     createSignal<BasicBlocklyPendingHistoryAction | null>(null)
+  const [getIsEditorTyping, setIsEditorTyping] = createSignal(false)
+  const [getPinnedActiveSnippetSortDate, setPinnedActiveSnippetSortDate] =
+    createSignal<string | null>(null)
 
   let editorView: EditorView | undefined
   let searchInputEl: HTMLInputElement | undefined
@@ -88,6 +90,32 @@ export const Snippets = () => {
   let handledTrashDropForCurrentDrag = false
   let suppressTrashButtonClick = false
   let dragPreviewEl: HTMLElement | null = null
+  let typingIdleTimeoutId: number | null = null
+
+  const getSnippetSortDateSource = (snippet: (typeof state.snippets)[number]) => {
+    return (
+      getSearchType() === "trash"
+        ? snippet.deletedAt || snippet.updatedAt || snippet.createdAt
+        : snippet.updatedAt || snippet.createdAt
+    )
+  }
+
+  const getSnippetSortDate = (snippet: (typeof state.snippets)[number]) => {
+    const pinnedActiveDate = getPinnedActiveSnippetSortDate()
+    const isPinnedActiveSnippet =
+      getSearchType() !== "trash" &&
+      Boolean(searchParams.id) &&
+      snippet.id === searchParams.id &&
+      getIsEditorTyping() &&
+      Boolean(pinnedActiveDate)
+
+    const sourceDate = isPinnedActiveSnippet
+      ? pinnedActiveDate!
+      : getSnippetSortDateSource(snippet)
+
+    const parsedDate = new Date(sourceDate)
+    return Number.isNaN(parsedDate.getTime()) ? new Date(0) : parsedDate
+  }
 
   const snippets = createMemo(() => {
     const keyword = getSearchKeyword().toLowerCase()
@@ -107,11 +135,80 @@ export const Snippets = () => {
         return conditions.every((v) => v)
       })
       .sort((a, b) => {
-        if (a.deletedAt && b.deletedAt) {
-          return a.deletedAt > b.deletedAt ? -1 : 1
+        const aTime = getSnippetSortDate(a).getTime()
+        const bTime = getSnippetSortDate(b).getTime()
+        if (aTime === bTime) {
+          return a.name.localeCompare(b.name)
         }
-        return a.createdAt > b.createdAt ? -1 : 1
+        return bTime - aTime
       })
+  })
+
+  const groupedSnippets = createMemo(() => {
+    if (getSearchType() === "trash") {
+      return [{ id: "trash", label: null, snippets: snippets() }]
+    }
+
+    const now = new Date()
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const yesterdayStart = new Date(todayStart)
+    yesterdayStart.setDate(todayStart.getDate() - 1)
+    const last7DaysStart = new Date(todayStart)
+    last7DaysStart.setDate(todayStart.getDate() - 7)
+
+    const groups: {
+      id: string
+      label: string | null
+      snippets: (typeof state.snippets)[number][]
+    }[] = []
+
+    const ensureGroup = (id: string, label: string | null) => {
+      let existingGroup = groups.find((group) => group.id === id)
+      if (!existingGroup) {
+        existingGroup = { id, label, snippets: [] }
+        groups.push(existingGroup)
+      }
+      return existingGroup
+    }
+
+    for (const snippet of snippets()) {
+      const snippetDate = getSnippetSortDate(snippet)
+      const snippetDayStart = new Date(
+        snippetDate.getFullYear(),
+        snippetDate.getMonth(),
+        snippetDate.getDate()
+      )
+
+      if (snippetDayStart.getTime() >= todayStart.getTime()) {
+        ensureGroup("today", "Today").snippets.push(snippet)
+        continue
+      }
+
+      if (snippetDayStart.getTime() >= yesterdayStart.getTime()) {
+        ensureGroup("yesterday", "Yesterday").snippets.push(snippet)
+        continue
+      }
+
+      if (snippetDayStart.getTime() >= last7DaysStart.getTime()) {
+        ensureGroup("last-7-days", "Last 7 Days").snippets.push(snippet)
+        continue
+      }
+
+      if (snippetDate.getFullYear() === now.getFullYear()) {
+        const monthLabel = snippetDate.toLocaleString(undefined, {
+          month: "short",
+        })
+        ensureGroup(`month-${snippetDate.getMonth()}`, monthLabel).snippets.push(
+          snippet
+        )
+        continue
+      }
+
+      const yearLabel = `${snippetDate.getFullYear()}`
+      ensureGroup(`year-${yearLabel}`, yearLabel).snippets.push(snippet)
+    }
+
+    return groups
   })
 
   const actualSelectedSnippetIds = createMemo(() => {
@@ -125,6 +222,16 @@ export const Snippets = () => {
   const snippet = createMemo(() =>
     state.snippets.find((snippet) => snippet.id === searchParams.id)
   )
+
+  const canDropDraggedSnippetToTrash = createMemo(() => {
+    const draggedSnippetId = getDraggedSnippetId()
+    if (!draggedSnippetId) return false
+
+    const draggedSnippet = state.snippets.find(
+      (snippet) => snippet.id === draggedSnippetId
+    )
+    return Boolean(draggedSnippet && !draggedSnippet.deletedAt)
+  })
 
   const isSidebarSnippetActive = (id: string) => {
     return id === snippet()?.id || getSelectedSnippetIds().includes(id)
@@ -248,7 +355,6 @@ export const Snippets = () => {
   }
 
   const resetTrashDragState = () => {
-    document.body.classList.remove("snippet-drag-active")
     if (dragPreviewEl) {
       dragPreviewEl.remove()
       dragPreviewEl = null
@@ -259,7 +365,10 @@ export const Snippets = () => {
   }
 
   onCleanup(() => {
-    document.body.classList.remove("snippet-drag-active")
+    if (typingIdleTimeoutId !== null) {
+      window.clearTimeout(typingIdleTimeoutId)
+      typingIdleTimeoutId = null
+    }
     if (dragPreviewEl) {
       dragPreviewEl.remove()
       dragPreviewEl = null
@@ -309,10 +418,14 @@ export const Snippets = () => {
       e.preventDefault()
       return
     }
+    const sourceSnippet = state.snippets.find((snippet) => snippet.id === snippetId)
+    if (!sourceSnippet || sourceSnippet.deletedAt) {
+      e.preventDefault()
+      return
+    }
 
     handledTrashDropForCurrentDrag = false
     suppressTrashButtonClick = false
-    document.body.classList.add("snippet-drag-active")
     setTrashDropSnippetId(null)
     setIsTrashDropTarget(false)
     setDraggedSnippetId(snippetId)
@@ -334,10 +447,6 @@ export const Snippets = () => {
       dragPreviewEl.style.opacity = "0.92"
       document.body.appendChild(dragPreviewEl)
       e.dataTransfer.setDragImage(dragPreviewEl, 14, 14)
-      window.setTimeout(() => {
-        dragPreviewEl?.remove()
-        dragPreviewEl = null
-      }, 0)
     }
   }
 
@@ -419,11 +528,24 @@ export const Snippets = () => {
   }
 
   const handleSnippetDragOver = (e: DragEvent & { currentTarget: HTMLElement }) => {
-    if (!getDraggedSnippetId()) return
+    if (!canDropDraggedSnippetToTrash()) return
     e.preventDefault()
     if (e.dataTransfer) {
       e.dataTransfer.dropEffect = "move"
     }
+  }
+
+  const handleSidebarDragOver = (e: DragEvent & { currentTarget: HTMLElement }) => {
+    if (!canDropDraggedSnippetToTrash()) return
+    e.preventDefault()
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = "move"
+    }
+  }
+
+  const handleSidebarDrop = (e: DragEvent & { currentTarget: HTMLElement }) => {
+    if (!canDropDraggedSnippetToTrash()) return
+    e.preventDefault()
   }
 
   const toggleTrashFilter = () => {
@@ -469,6 +591,19 @@ export const Snippets = () => {
 
     const normalizedValue = isBasicSnippet() ? value.toUpperCase() : value
     if (normalizedValue === content()) return
+
+    if (!getIsEditorTyping()) {
+      setPinnedActiveSnippetSortDate(getSnippetSortDateSource(currentSnippet))
+    }
+    setIsEditorTyping(true)
+    if (typingIdleTimeoutId !== null) {
+      window.clearTimeout(typingIdleTimeoutId)
+    }
+    typingIdleTimeoutId = window.setTimeout(() => {
+      setIsEditorTyping(false)
+      setPinnedActiveSnippetSortDate(null)
+      typingIdleTimeoutId = null
+    }, 1200)
 
     setContent(normalizedValue)
     setIsContentDirty(true)
@@ -659,11 +794,26 @@ export const Snippets = () => {
     fallbackEl?.focus()
   }
 
-  createEffect(() => {
-    if (getSearchType()) {
-      searchInputEl?.focus()
+  const collapseSearch = (options?: { clearKeyword?: boolean }) => {
+    if (options?.clearKeyword) {
+      setSearchKeyword("")
     }
-  })
+    setIsSearchFocused(false)
+    if (searchInputEl && document.activeElement === searchInputEl) {
+      searchInputEl.blur()
+    }
+  }
+
+  const handleNewSnippetMouseDown = (e: MouseEvent) => {
+    // Keep button click stable while search is focused (prevents blur/reflow click loss).
+    e.preventDefault()
+  }
+
+  const handleNewSnippetClick = (e: MouseEvent) => {
+    e.preventDefault()
+    collapseSearch({ clearKeyword: true })
+    void newSnippet()
+  }
 
   createEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
@@ -741,6 +891,12 @@ export const Snippets = () => {
     on(
       () => searchParams.id,
       () => {
+        if (typingIdleTimeoutId !== null) {
+          window.clearTimeout(typingIdleTimeoutId)
+          typingIdleTimeoutId = null
+        }
+        setIsEditorTyping(false)
+        setPinnedActiveSnippetSortDate(null)
         setPendingBuildInsert(null)
         setPendingBuildJump(null)
         setPendingBuildHistoryAction(null)
@@ -822,7 +978,11 @@ export const Snippets = () => {
   return (
     <div class="h-screen" classList={{ "is-mac": state.isMac }}>
       <div class="h-main flex">
-        <div class="border-r w-64 shrink-0 h-full flex flex-col">
+        <div
+          class="border-r w-64 shrink-0 h-full flex flex-col"
+          onDragOver={handleSidebarDragOver}
+          onDrop={handleSidebarDrop}
+        >
           <div class="sidebar-header text-zinc-500 dark:text-zinc-300 text-xs">
             <Show when={state.isMac}>
               <div class="h-6" data-tauri-drag-region></div>
@@ -837,25 +997,25 @@ export const Snippets = () => {
                   value={getSearchKeyword()!}
                   onInput={(e) => setSearchKeyword(e.currentTarget.value)}
                   onFocus={() => setIsSearchFocused(true)}
-                  onBlur={() => setIsSearchFocused(false)}
-                  onKeyPress={(e) => {
+                  onBlur={() => collapseSearch()}
+                  onKeyDown={(e) => {
                     if (e.key === "Escape") {
                       e.preventDefault()
                       if (getSearchType() === "trash") {
                         setSearchType("non-trash")
-                        return
                       }
-                      setSearchKeyword("")
+                      collapseSearch({ clearKeyword: true })
                     }
                   }}
                 />
                 <Button
                   type="button"
                   icon="i-ic:outline-add"
-                  onClick={newSnippet}
+                  onMouseDown={handleNewSnippetMouseDown}
+                  onClick={handleNewSnippetClick}
                   tooltip={{ content: "New script" }}
                 ></Button>
-                <Show when={!getIsSearchFocused()}>
+                <Show when={!getIsSearchFocused() || Boolean(getDraggedSnippetId())}>
                   <button
                     ref={trashButtonEl}
                     type="button"
@@ -863,7 +1023,7 @@ export const Snippets = () => {
                     class="inline-flex items-center justify-center h-6 w-6 rounded-lg cursor active:ring-2 ring-blue-500 transition-colors"
                     classList={{
                       "ring-2 ring-blue-500 bg-blue-500/10":
-                        getIsTrashDropTarget() || Boolean(getDraggedSnippetId()),
+                        getIsTrashDropTarget() || canDropDraggedSnippetToTrash(),
                       "bg-blue-500 text-white": getSearchType() === "trash",
                       "hover:bg-zinc-200 dark:hover:text-white dark:hover:bg-zinc-600":
                         getSearchType() !== "trash",
@@ -903,105 +1063,107 @@ export const Snippets = () => {
               </Show>
             </div>
           </div>
-          <div class="sidebar-body group/sidebar-body flex-1 overflow-y-auto custom-scrollbar scrollbar-group p-2 pt-0 space-y-1">
-            <For each={snippets()}>
-              {(snippet) => {
-                return (
-                  <Link
-                    href={`/scripts?${new URLSearchParams({ id: snippet.id }).toString()}`}
-                    draggable={getInlineRenameSnippetId() !== snippet.id}
-                    classList={{
-                      "group text-sm px-2 block select-none rounded-lg py-1": true,
-                      "cursor-grab": getInlineRenameSnippetId() !== snippet.id,
-                      "cursor-grabbing":
-                        getInlineRenameSnippetId() !== snippet.id &&
-                        getDraggedSnippetId() === snippet.id,
-                      "bg-blue-500": isSidebarSnippetActive(snippet.id),
-                      "hover:bg-zinc-100 dark:hover:bg-zinc-600":
-                        !isSidebarSnippetActive(snippet.id),
-                      "text-white": isSidebarSnippetActive(snippet.id),
-                    }}
-                    onClick={(e) => {
-                      if (e.shiftKey) {
-                        e.preventDefault()
-                        setSelectedSnippetIds((ids) => {
-                          if (ids.includes(snippet.id)) {
-                            return ids.filter((_id) => _id !== snippet.id)
-                          }
-                          return [...ids, snippet.id]
-                        })
-                      }
-                    }}
-                    onDragStart={(e) => handleSnippetDragStart(e, snippet.id)}
-                    onDragEnd={(e) => void handleSnippetDragEnd(e)}
-                    onDragOver={handleSnippetDragOver}
-                  >
-                    <Show
-                      when={getInlineRenameSnippetId() === snippet.id}
-                      fallback={
-                        <div
-                          class="truncate"
-                          onDblClick={(e) =>
-                            startInlineRename(e, snippet.id, snippet.name)
-                          }
-                        >
-                          {snippet.name}
-                        </div>
-                      }
-                    >
-                      <input
-                        ref={renameInputEl}
-                        spellcheck={false}
-                        class="h-6 w-full px-1 rounded border bg-transparent text-sm"
-                        classList={{
-                          "text-white border-blue-300": isSidebarSnippetActive(
-                            snippet.id
-                          ),
-                          "text-zinc-900 dark:text-zinc-100 border-blue-500":
-                            !isSidebarSnippetActive(snippet.id),
-                        }}
-                        value={getInlineRenameValue()}
-                        onInput={(e) =>
-                          setInlineRenameValue(e.currentTarget.value)
-                        }
-                        onMouseDown={(e) => {
-                          e.stopPropagation()
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                        }}
-                        onBlur={() => void saveInlineRename(snippet.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault()
-                            void saveInlineRename(snippet.id).then(() => {
-                              focusMainPane()
-                            })
-                          } else if (e.key === "Tab") {
-                            e.preventDefault()
-                            void saveInlineRename(snippet.id).then(() => {
-                              focusMainPane()
-                            })
-                          } else if (e.key === "Escape") {
-                            e.preventDefault()
-                            cancelInlineRename()
-                          }
-                        }}
-                      />
-                    </Show>
-                    <div
-                      class="text-xs mt-[1px]"
-                      classList={{
-                        "text-zinc-400 dark:text-zinc-500 group-hover:text-zinc-400":
-                          !isSidebarSnippetActive(snippet.id),
-                        "text-blue-100": isSidebarSnippetActive(snippet.id),
-                      }}
-                    >
-                      <span class="truncate">{timeago(snippet.createdAt)}</span>
+          <div class="sidebar-body group/sidebar-body flex-1 overflow-y-auto custom-scrollbar scrollbar-group p-2 pt-0">
+            <For each={groupedSnippets()}>
+              {(group) => (
+                <div class="space-y-1">
+                  <Show when={group.label}>
+                    <div class="px-2 pt-2 pb-0.5 text-[11px] font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+                      {group.label}
                     </div>
-                  </Link>
-                )
-              }}
+                  </Show>
+                  <For each={group.snippets}>
+                    {(snippet) => {
+                      return (
+                        <Link
+                          href={`/scripts?${new URLSearchParams({ id: snippet.id }).toString()}`}
+                          draggable={getInlineRenameSnippetId() !== snippet.id}
+                          classList={{
+                            "group text-sm px-2 block select-none rounded-lg py-1":
+                              true,
+                            "cursor-grab":
+                              getInlineRenameSnippetId() !== snippet.id,
+                            "cursor-grabbing":
+                              getInlineRenameSnippetId() !== snippet.id &&
+                              getDraggedSnippetId() === snippet.id,
+                            "bg-blue-500": isSidebarSnippetActive(snippet.id),
+                            "hover:bg-zinc-100 dark:hover:bg-zinc-600":
+                              !isSidebarSnippetActive(snippet.id),
+                            "text-white": isSidebarSnippetActive(snippet.id),
+                          }}
+                          onClick={(e) => {
+                            if (e.shiftKey) {
+                              e.preventDefault()
+                              setSelectedSnippetIds((ids) => {
+                                if (ids.includes(snippet.id)) {
+                                  return ids.filter((_id) => _id !== snippet.id)
+                                }
+                                return [...ids, snippet.id]
+                              })
+                            }
+                          }}
+                          onDragStart={(e) => handleSnippetDragStart(e, snippet.id)}
+                          onDragEnd={(e) => void handleSnippetDragEnd(e)}
+                          onDragOver={handleSnippetDragOver}
+                        >
+                          <Show
+                            when={getInlineRenameSnippetId() === snippet.id}
+                            fallback={
+                              <div
+                                class="truncate"
+                                onDblClick={(e) =>
+                                  startInlineRename(e, snippet.id, snippet.name)
+                                }
+                              >
+                                {snippet.name}
+                              </div>
+                            }
+                          >
+                            <input
+                              ref={renameInputEl}
+                              spellcheck={false}
+                              class="h-6 w-full px-1 rounded border bg-transparent text-sm"
+                              classList={{
+                                "text-white border-blue-300":
+                                  isSidebarSnippetActive(snippet.id),
+                                "text-zinc-900 dark:text-zinc-100 border-blue-500":
+                                  !isSidebarSnippetActive(snippet.id),
+                              }}
+                              value={getInlineRenameValue()}
+                              onInput={(e) =>
+                                setInlineRenameValue(e.currentTarget.value)
+                              }
+                              onMouseDown={(e) => {
+                                e.stopPropagation()
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                              }}
+                              onBlur={() => void saveInlineRename(snippet.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault()
+                                  void saveInlineRename(snippet.id).then(() => {
+                                    focusMainPane()
+                                  })
+                                } else if (e.key === "Tab") {
+                                  e.preventDefault()
+                                  void saveInlineRename(snippet.id).then(() => {
+                                    focusMainPane()
+                                  })
+                                } else if (e.key === "Escape") {
+                                  e.preventDefault()
+                                  cancelInlineRename()
+                                }
+                              }}
+                            />
+                          </Show>
+                        </Link>
+                      )
+                    }}
+                  </For>
+                </div>
+              )}
             </For>
           </div>
         </div>
@@ -1160,6 +1322,7 @@ export const Snippets = () => {
                   <BasicBlocklyEditor
                     source={content()}
                     onSourceChange={handleEditorChange}
+                    isVisible={isBuildMode()}
                     pendingInsert={getPendingBuildInsert()}
                     onPendingInsertHandled={(id) => {
                       if (getPendingBuildInsert()?.id === id) {

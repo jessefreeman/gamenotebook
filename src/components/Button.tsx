@@ -5,6 +5,7 @@ export const Button = (props: {
   type?: "button" | "submit"
   isFull?: boolean
   onClick?: (e: MouseEvent) => void
+  onMouseDown?: (e: MouseEvent) => void
   children?: JSX.Element
   tooltip?: TooltipOptions
   isActive?: boolean
@@ -29,6 +30,7 @@ export const Button = (props: {
             !props.isActive,
           "hint--bottom hint--rounded hint--no-animate": Boolean(props.tooltip),
         }}
+        onMouseDown={props.onMouseDown}
         onClick={props.onClick}
       >
         <Show when={props.icon}>

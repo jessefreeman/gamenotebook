@@ -36,6 +36,7 @@ export type BasicBlocklyPendingHistoryAction = {
 export const BasicBlocklyEditor = (props: {
   source: string
   onSourceChange: (source: string) => void
+  isVisible?: boolean
   pendingInsert?: BasicBlocklyPendingInsert | null
   onPendingInsertHandled?: (id: number) => void
   pendingJump?: BasicBlocklyPendingJump | null
@@ -48,6 +49,8 @@ export const BasicBlocklyEditor = (props: {
   let syncingFromSource = false
   let mutatingWorkspace = false
   let lastWorkspaceSource = ""
+  let resizeObserver: ResizeObserver | null = null
+  let pendingResizeTimeoutId: number | null = null
 
   const normalizeSource = (source: string): string =>
     emitBasicSourceFromVisualLines(parseBasicSourceToVisualLines(source))
@@ -155,13 +158,40 @@ export const BasicBlocklyEditor = (props: {
       }
     }
 
+    const scheduleResizeWorkspace = () => {
+      if (!workspace) return
+      window.requestAnimationFrame(() => {
+        resizeWorkspace()
+      })
+      if (pendingResizeTimeoutId !== null) {
+        window.clearTimeout(pendingResizeTimeoutId)
+      }
+      pendingResizeTimeoutId = window.setTimeout(() => {
+        pendingResizeTimeoutId = null
+        resizeWorkspace()
+      }, 0)
+    }
+
     workspace.addChangeListener(onWorkspaceChange)
     loadSource(props.source)
     window.addEventListener("resize", resizeWorkspace)
-    queueMicrotask(resizeWorkspace)
+    queueMicrotask(scheduleResizeWorkspace)
+
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => {
+        scheduleResizeWorkspace()
+      })
+      resizeObserver.observe(hostEl)
+    }
 
     onCleanup(() => {
       window.removeEventListener("resize", resizeWorkspace)
+      if (pendingResizeTimeoutId !== null) {
+        window.clearTimeout(pendingResizeTimeoutId)
+        pendingResizeTimeoutId = null
+      }
+      resizeObserver?.disconnect()
+      resizeObserver = null
       workspace?.removeChangeListener(onWorkspaceChange)
       workspace?.dispose()
       workspace = null
@@ -178,6 +208,22 @@ export const BasicBlocklyEditor = (props: {
 
     loadSource(source)
   })
+
+  createEffect(
+    on(
+      () => props.isVisible,
+      (isVisible) => {
+        if (!isVisible || !workspace) return
+        queueMicrotask(() => {
+          if (!workspace) return
+          Blockly.svgResize(workspace)
+          window.requestAnimationFrame(() => {
+            workspace && Blockly.svgResize(workspace)
+          })
+        })
+      }
+    )
+  )
 
   createEffect(
     on(

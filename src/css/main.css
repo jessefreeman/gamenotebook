@@ -23,11 +23,6 @@ body {
   background-color: var(--app-bg);
 }
 
-body.snippet-drag-active,
-body.snippet-drag-active * {
-  cursor: grabbing !important;
-}
-
 input:focus {
   outline: none;
 }
@@ -61,7 +56,7 @@ input:focus {
 }
 
 .cursor {
-  @apply cursor-default;
+  @apply cursor-pointer;
 }
 
 .input {
