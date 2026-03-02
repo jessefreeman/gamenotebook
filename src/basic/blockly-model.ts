@@ -292,8 +292,11 @@ const looksLikeBasicExpression = (value: string): boolean => {
 const parsePrintValueForVisual = (value: string): string => {
   return parsePrintSegments(value)
     .map(({ expression, separator }) => {
-      const parsed = parseBasicStringLiteral(expression)
-      return `${parsed ?? expression}${separator ?? ""}`
+      const trimmedExpression = expression.trim()
+      const parsed = parseBasicStringLiteral(trimmedExpression)
+      const normalizedExpression =
+        parsed === null ? trimmedExpression : toBasicStringLiteral(parsed)
+      return `${normalizedExpression}${separator ?? ""}`
     })
     .join("")
 }

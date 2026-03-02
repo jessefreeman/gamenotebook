@@ -29,13 +29,14 @@ import { actions, state } from "../store"
 import { Button } from "../components/Button"
 import { BasicRunnerCanvas } from "../components/BasicRunnerCanvas"
 import { analyzeLegacyBasicPasteMigration } from "../basic/blockly-model"
+import { SettingsPanel } from "../components/SettingsPanel"
 
 type SnippetMainMode = "play" | "code" | "build"
 type SnippetEditorMode = "code" | "build"
 
 export const Snippets = () => {
   const goto = useNavigate()
-  const [searchParams] = useSearchParams<{ id?: string }>()
+  const [searchParams] = useSearchParams<{ id?: string; view?: string }>()
   const [content, setContent] = createSignal("")
   const [getOpenBasicCommandModal, setOpenBasicCommandModal] =
     createSignal(false)
@@ -76,6 +77,10 @@ export const Snippets = () => {
   const [getIsEditorTyping, setIsEditorTyping] = createSignal(false)
   const [getPinnedActiveSnippetSortDate, setPinnedActiveSnippetSortDate] =
     createSignal<string | null>(null)
+  const [getIsCodeEditorFocused, setIsCodeEditorFocused] = createSignal(false)
+  const [getLastTrashedSnippetId, setLastTrashedSnippetId] = createSignal<
+    string | null
+  >(null)
 
   let editorView: EditorView | undefined
   let searchInputEl: HTMLInputElement | undefined
@@ -213,6 +218,9 @@ export const Snippets = () => {
   })
 
   const actualSelectedSnippetIds = createMemo(() => {
+    if (getSearchType() === "trash") {
+      return []
+    }
     const ids = [...getSelectedSnippetIds()]
     if (searchParams.id && snippets().some((s) => s.id === searchParams.id)) {
       ids.push(searchParams.id)
@@ -223,6 +231,7 @@ export const Snippets = () => {
   const snippet = createMemo(() =>
     state.snippets.find((snippet) => snippet.id === searchParams.id)
   )
+  const isSettingsView = createMemo(() => searchParams.view === "settings")
 
   const canDropDraggedSnippetToTrash = createMemo(() => {
     const draggedSnippetId = getDraggedSnippetId()
@@ -235,6 +244,9 @@ export const Snippets = () => {
   })
 
   const isSidebarSnippetActive = (id: string) => {
+    if (getSearchType() === "trash") {
+      return false
+    }
     return id === snippet()?.id || getSelectedSnippetIds().includes(id)
   }
 
@@ -314,7 +326,38 @@ export const Snippets = () => {
   }
 
   const openSettings = () => {
-    goto("/settings")
+    if (isSettingsView()) {
+      closeSettingsView()
+      return
+    }
+
+    const params = new URLSearchParams()
+    if (searchParams.id) {
+      params.set("id", searchParams.id)
+    }
+    params.set("view", "settings")
+    goto(`/scripts?${params.toString()}`)
+  }
+
+  const closeSettingsView = () => {
+    const params = new URLSearchParams()
+    if (searchParams.id) {
+      params.set("id", searchParams.id)
+    }
+    const query = params.toString()
+    goto(query ? `/scripts?${query}` : "/scripts")
+  }
+
+  const gotoScripts = (options?: { id?: string | null; view?: string | null }) => {
+    const params = new URLSearchParams()
+    if (options?.id) {
+      params.set("id", options.id)
+    }
+    if (options?.view) {
+      params.set("view", options.view)
+    }
+    const query = params.toString()
+    goto(query ? `/scripts?${query}` : "/scripts")
   }
 
   const startInlineRename = (
@@ -376,6 +419,32 @@ export const Snippets = () => {
     }
   })
 
+  createEffect(() => {
+    const draggedSnippetId = getDraggedSnippetId()
+    if (!draggedSnippetId) return
+
+    const handleWindowDragOver = (event: DragEvent) => {
+      if (!getDraggedSnippetId()) return
+      event.preventDefault()
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "move"
+      }
+    }
+
+    const handleWindowDrop = (event: DragEvent) => {
+      if (!getDraggedSnippetId()) return
+      event.preventDefault()
+    }
+
+    window.addEventListener("dragover", handleWindowDragOver)
+    window.addEventListener("drop", handleWindowDrop)
+
+    onCleanup(() => {
+      window.removeEventListener("dragover", handleWindowDragOver)
+      window.removeEventListener("drop", handleWindowDrop)
+    })
+  })
+
   const armTrashButtonClickSuppression = () => {
     suppressTrashButtonClick = true
     window.setTimeout(() => {
@@ -389,12 +458,44 @@ export const Snippets = () => {
     )
     if (!targetSnippet || targetSnippet.deletedAt) return
 
-    if (!(await confirm(`Are you sure you want to move this script to Trash?`))) {
-      return
+    if (state.app.confirmTrashMoves) {
+      if (!(await confirm(`Are you sure you want to move this script to Trash?`))) {
+        return
+      }
     }
 
     await actions.moveSnippetsToTrash([draggedSnippetId])
+    setLastTrashedSnippetId(draggedSnippetId)
     setSelectedSnippetIds((ids) => ids.filter((id) => id !== draggedSnippetId))
+    if (searchParams.id === draggedSnippetId) {
+      gotoScripts()
+    }
+  }
+
+  const restoreSnippetFromTrash = async (
+    snippetId: string,
+    options?: { openAfterRestore?: boolean; withPrompt?: boolean }
+  ) => {
+    const targetSnippet = state.snippets.find((snippet) => snippet.id === snippetId)
+    if (!targetSnippet || !targetSnippet.deletedAt) return false
+
+    if (options?.withPrompt) {
+      const confirmed = await confirm(
+        `Restore "${targetSnippet.name}" from Trash?`
+      )
+      if (!confirmed) return false
+    }
+
+    await actions.moveSnippetsToTrash([snippetId], true)
+    if (getLastTrashedSnippetId() === snippetId) {
+      setLastTrashedSnippetId(null)
+    }
+    setSearchType("non-trash")
+    setSelectedSnippetIds([])
+    setInlineRenameSnippetId(null)
+    setInlineRenameValue("")
+    gotoScripts({ id: options?.openAfterRestore === false ? null : snippetId })
+    return true
   }
 
   const getDraggedSnippetIdFromEvent = (e: DragEvent) => {
@@ -440,12 +541,25 @@ export const Snippets = () => {
         dragPreviewEl.remove()
       }
       dragPreviewEl = e.currentTarget.cloneNode(true) as HTMLElement
+      const computedStyle = window.getComputedStyle(e.currentTarget)
+      const isDarkMode = document.documentElement.classList.contains("dark")
+      const fallbackBackground = isDarkMode ? "rgb(82 82 91)" : "rgb(228 228 231)"
+      const sourceBackground = computedStyle.backgroundColor
       dragPreviewEl.style.position = "fixed"
       dragPreviewEl.style.top = "-9999px"
       dragPreviewEl.style.left = "-9999px"
       dragPreviewEl.style.width = `${e.currentTarget.offsetWidth}px`
       dragPreviewEl.style.pointerEvents = "none"
       dragPreviewEl.style.opacity = "0.92"
+      dragPreviewEl.style.backgroundColor =
+        sourceBackground && sourceBackground !== "rgba(0, 0, 0, 0)"
+          ? sourceBackground
+          : fallbackBackground
+      dragPreviewEl.style.borderRadius = "0.5rem"
+      dragPreviewEl.style.color = computedStyle.color
+      dragPreviewEl.style.boxShadow = isDarkMode
+        ? "0 8px 20px rgba(0, 0, 0, 0.45)"
+        : "0 8px 20px rgba(24, 24, 27, 0.18)"
       document.body.appendChild(dragPreviewEl)
       e.dataTransfer.setDragImage(dragPreviewEl, 14, 14)
     }
@@ -478,6 +592,9 @@ export const Snippets = () => {
   const handleTrashDragOver = (e: DragEvent & { currentTarget: HTMLElement }) => {
     const draggedSnippetId = getDraggedSnippetIdFromEvent(e)
     if (!draggedSnippetId) {
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = "none"
+      }
       setTrashDropSnippetId(null)
       setIsTrashDropTarget(false)
       return
@@ -487,6 +604,9 @@ export const Snippets = () => {
       (snippet) => snippet.id === draggedSnippetId
     )
     if (!targetSnippet || targetSnippet.deletedAt) {
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = "none"
+      }
       setTrashDropSnippetId(null)
       setIsTrashDropTarget(false)
       return
@@ -549,11 +669,25 @@ export const Snippets = () => {
     e.preventDefault()
   }
 
-  const toggleTrashFilter = () => {
+  const toggleTrashFilter = async () => {
     if (getSearchType() === "trash") {
+      const candidateId = getLastTrashedSnippetId() || snippets()[0]?.id
+      if (candidateId) {
+        const restored = await restoreSnippetFromTrash(candidateId, {
+          openAfterRestore: true,
+        })
+        if (restored) return
+      }
       setSearchType("non-trash")
+      setSelectedSnippetIds([])
+      gotoScripts()
       return
     }
+
+    setInlineRenameSnippetId(null)
+    setInlineRenameValue("")
+    setSelectedSnippetIds([])
+    gotoScripts()
     setSearchType("trash")
   }
 
@@ -565,7 +699,7 @@ export const Snippets = () => {
       e.stopPropagation()
       return
     }
-    toggleTrashFilter()
+    void toggleTrashFilter()
   }
 
   const persistEditorChange = debounce(async (
@@ -671,15 +805,29 @@ export const Snippets = () => {
 
   const moveSelectedSnippetsToTrashOrRestore = async () => {
     const restore = getSearchType() === "trash"
-    if (
-      await confirm(
+    const shouldProceed =
+      !restore && !state.app.confirmTrashMoves
+        ? true
+        : await confirm(
         restore
           ? `Are you sure you want to restore selected scripts from Trash`
           : `Are you sure you want to move selected scripts to Trash?`
       )
-    ) {
-      await actions.moveSnippetsToTrash(actualSelectedSnippetIds(), restore)
-      setSelectedSnippetIds([])
+    if (!shouldProceed) return
+
+    const targetIds = actualSelectedSnippetIds()
+    await actions.moveSnippetsToTrash(targetIds, restore)
+    if (!restore && targetIds.length > 0) {
+      setLastTrashedSnippetId(targetIds[0])
+    }
+    setSelectedSnippetIds([])
+    if (restore && targetIds.length > 0) {
+      setSearchType("non-trash")
+      gotoScripts({ id: targetIds[0] })
+      return
+    }
+    if (!restore && searchParams.id && targetIds.includes(searchParams.id)) {
+      gotoScripts()
     }
   }
 
@@ -925,7 +1073,14 @@ export const Snippets = () => {
 
         // reload snippets every 2 seconds for external/local file changes
         const watchStorage = window.setInterval(() => {
-          if (getInlineRenameSnippetId()) return
+          if (
+            getInlineRenameSnippetId() ||
+            getIsCodeEditorFocused() ||
+            getIsEditorTyping() ||
+            getIsContentDirty()
+          ) {
+            return
+          }
           void actions.loadActiveStorage()
         }, 2000)
 
@@ -939,7 +1094,14 @@ export const Snippets = () => {
   const loadContent = async () => {
     if (!searchParams.id) return
 
-    if (getIsContentDirty() || getIsSavingContent() || getIsEditorTyping()) return
+    if (
+      getIsContentDirty() ||
+      getIsSavingContent() ||
+      getIsEditorTyping() ||
+      getIsCodeEditorFocused()
+    ) {
+      return
+    }
 
     const targetId = searchParams.id
     const revisionAtStart = latestContentRevision
@@ -948,7 +1110,14 @@ export const Snippets = () => {
     if (requestId !== contentLoadRequestId) return
     if (searchParams.id !== targetId) return
     if (revisionAtStart !== latestContentRevision) return
-    if (getIsContentDirty() || getIsSavingContent() || getIsEditorTyping()) return
+    if (
+      getIsContentDirty() ||
+      getIsSavingContent() ||
+      getIsEditorTyping() ||
+      getIsCodeEditorFocused()
+    ) {
+      return
+    }
     if (nextContent !== content()) {
       setContent(nextContent)
     }
@@ -967,6 +1136,9 @@ export const Snippets = () => {
 
         // reload snippet content every 2 seconds
         const watchFile = window.setInterval(() => {
+          if (getIsCodeEditorFocused() || getIsEditorTyping()) {
+            return
+          }
           void loadContent()
         }, 2000)
 
@@ -1029,13 +1201,13 @@ export const Snippets = () => {
                     ref={trashButtonEl}
                     type="button"
                     title="Show scripts in trash"
-                    class="inline-flex items-center justify-center h-6 w-6 rounded-lg cursor active:ring-2 ring-blue-500 transition-colors"
+                    class="inline-flex items-center justify-center h-6 w-6 rounded-lg transition-colors ring-0 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 active:ring-0"
                     classList={{
-                      "ring-2 ring-blue-500 bg-blue-500/10":
-                        getIsTrashDropTarget() || canDropDraggedSnippetToTrash(),
+                      "bg-zinc-200 dark:text-white dark:bg-zinc-600":
+                        getIsTrashDropTarget() && getSearchType() !== "trash",
                       "bg-blue-500 text-white": getSearchType() === "trash",
                       "hover:bg-zinc-200 dark:hover:text-white dark:hover:bg-zinc-600":
-                        getSearchType() !== "trash",
+                        getSearchType() !== "trash" && !getIsTrashDropTarget(),
                     }}
                     onClick={handleTrashButtonClick}
                     onDragEnter={handleTrashDragOver}
@@ -1053,23 +1225,6 @@ export const Snippets = () => {
                   ></Button>
                 </Show>
               </div>
-              <Show when={getSearchType() === "trash"}>
-                <div class="flex justify-end pt-1">
-                  <button
-                    type="button"
-                    disabled={snippets().length === 0}
-                    class="cursor whitespace-nowrap border-zinc-400 dark:border-zinc-600 border h-6 rounded-md px-2 flex items-center text-xs"
-                    classList={{
-                      "active:bg-zinc-200 dark:active:bg-zinc-700":
-                        snippets().length !== 0,
-                      "disabled:opacity-50": true,
-                    }}
-                    onClick={emptyTrash}
-                  >
-                    Empty
-                  </button>
-                </div>
-              </Show>
             </div>
           </div>
           <div class="sidebar-body group/sidebar-body flex-1 overflow-y-auto custom-scrollbar scrollbar-group p-2 pt-0">
@@ -1086,13 +1241,18 @@ export const Snippets = () => {
                       return (
                         <Link
                           href={`/scripts?${new URLSearchParams({ id: snippet.id }).toString()}`}
-                          draggable={getInlineRenameSnippetId() !== snippet.id}
+                          draggable={
+                            getSearchType() !== "trash" &&
+                            getInlineRenameSnippetId() !== snippet.id
+                          }
                           classList={{
                             "group text-sm px-2 block select-none rounded-lg py-1":
                               true,
                             "cursor-grab":
+                              getSearchType() !== "trash" &&
                               getInlineRenameSnippetId() !== snippet.id,
                             "cursor-grabbing":
+                              getSearchType() !== "trash" &&
                               getInlineRenameSnippetId() !== snippet.id &&
                               getDraggedSnippetId() === snippet.id,
                             "bg-blue-500": isSidebarSnippetActive(snippet.id),
@@ -1101,6 +1261,16 @@ export const Snippets = () => {
                             "text-white": isSidebarSnippetActive(snippet.id),
                           }}
                           onClick={(e) => {
+                            if (getSearchType() === "trash") {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              void restoreSnippetFromTrash(snippet.id, {
+                                openAfterRestore: true,
+                                withPrompt: true,
+                              })
+                              return
+                            }
+
                             if (e.shiftKey) {
                               e.preventDefault()
                               setSelectedSnippetIds((ids) => {
@@ -1116,11 +1286,15 @@ export const Snippets = () => {
                           onDragOver={handleSnippetDragOver}
                         >
                           <Show
-                            when={getInlineRenameSnippetId() === snippet.id}
+                            when={
+                              getSearchType() !== "trash" &&
+                              getInlineRenameSnippetId() === snippet.id
+                            }
                             fallback={
                               <div
                                 class="truncate"
                                 onDblClick={(e) =>
+                                  getSearchType() !== "trash" &&
                                   startInlineRename(e, snippet.id, snippet.name)
                                 }
                               >
@@ -1175,18 +1349,37 @@ export const Snippets = () => {
               )}
             </For>
           </div>
+          <Show when={getSearchType() === "trash"}>
+            <div class="border-t px-3 py-2">
+              <button
+                type="button"
+                disabled={snippets().length === 0}
+                class="w-full whitespace-nowrap border-zinc-400 dark:border-zinc-600 border h-7 rounded-md px-2 inline-flex items-center justify-center text-xs"
+                classList={{
+                  "active:bg-zinc-200 dark:active:bg-zinc-700":
+                    snippets().length !== 0,
+                  "disabled:opacity-50": true,
+                }}
+                onClick={emptyTrash}
+              >
+                Empty Trash
+              </button>
+            </div>
+          </Show>
         </div>
         <Show
-          when={snippet()}
+          when={Boolean(snippet()) || isSettingsView()}
           fallback={
             <div
               data-tauri-drag-region
               class="h-full w-full flex items-center justify-center px-20 text-center text-zinc-400 text-xl"
             >
               <span class="select-none">
-                {hasActiveStorage()
-                  ? "Select or create a script from sidebar"
-                  : "Select a folder in Settings to use folder storage"}
+                {getSearchType() === "trash"
+                  ? "Select a file to restore or empty the trash"
+                  : hasActiveStorage()
+                    ? "Select or create a script from sidebar"
+                    : "Select a folder in Settings to use folder storage"}
               </span>
             </div>
           }
@@ -1195,6 +1388,10 @@ export const Snippets = () => {
             <Show when={state.isMac}>
               <div class="h-6 shrink-0" data-tauri-drag-region></div>
             </Show>
+            <Show
+              when={isSettingsView()}
+              fallback={
+                <>
             <div
               data-tauri-drag-region
               class="border-b flex h-mainHeader shrink-0 items-center px-3"
@@ -1302,6 +1499,7 @@ export const Snippets = () => {
                     onChange={handleEditorChange}
                     onTemplateTrigger={() => setOpenBasicCommandModal(true)}
                     onPasteTransform={transformPastedBasicSource}
+                    onFocusChange={(focused) => setIsCodeEditorFocused(focused)}
                     onViewReady={(view) => {
                       editorView = view
                     }}
@@ -1318,6 +1516,7 @@ export const Snippets = () => {
                     onChange={handleEditorChange}
                     onTemplateTrigger={() => setOpenBasicCommandModal(true)}
                     onPasteTransform={transformPastedBasicSource}
+                    onFocusChange={(focused) => setIsCodeEditorFocused(focused)}
                     onViewReady={(view) => {
                       editorView = view
                     }}
@@ -1360,11 +1559,25 @@ export const Snippets = () => {
                     source={content()}
                     snippetName={snippet()!.name}
                     runVersion={getPlayRunVersion()}
+                    paletteMode={state.app.playerPaletteMode}
                     class="h-full w-full bg-black overflow-hidden flex items-center justify-center relative"
                   />
                 </div>
               </Show>
             </div>
+                </>
+              }
+            >
+              <div
+                data-tauri-drag-region
+                class="border-b flex h-mainHeader shrink-0 items-center px-3"
+              >
+                <div class="text-sm font-medium">Settings</div>
+              </div>
+              <div class="flex-1 min-h-0">
+                <SettingsPanel />
+              </div>
+            </Show>
           </div>
         </Show>
       </div>

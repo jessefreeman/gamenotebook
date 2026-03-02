@@ -2,6 +2,11 @@ import { nanoid } from "nanoid"
 import { dialog, fs, path } from "@tauri-apps/api"
 import { BaseDirectory } from "@tauri-apps/api/fs"
 import { createStore } from "solid-js/store"
+import {
+  type PlayerPaletteMode,
+  type ThemeMode,
+  type UiPaletteMode,
+} from "./lib/theme"
 
 export interface Snippet {
   id: string
@@ -20,6 +25,10 @@ interface AppData {
   storageMode: StorageMode
   storageFolder: string | null
   defaultEditor: DefaultEditor
+  confirmTrashMoves: boolean
+  themeMode: ThemeMode
+  uiPaletteMode: UiPaletteMode
+  playerPaletteMode: PlayerPaletteMode
 }
 
 interface SnippetIndexData {
@@ -48,6 +57,10 @@ const [state, setState] = createStore<{
     storageMode: "local",
     storageFolder: null,
     defaultEditor: "code",
+    confirmTrashMoves: true,
+    themeMode: "system",
+    uiPaletteMode: "default",
+    playerPaletteMode: "default",
   },
   snippets: [],
   isMac: /macintosh/i.test(navigator.userAgent),
@@ -70,6 +83,10 @@ const getAppDataSnapshot = (): AppData => {
     storageMode: state.app.storageMode,
     storageFolder: state.app.storageFolder,
     defaultEditor: state.app.defaultEditor,
+    confirmTrashMoves: state.app.confirmTrashMoves,
+    themeMode: state.app.themeMode,
+    uiPaletteMode: state.app.uiPaletteMode,
+    playerPaletteMode: state.app.playerPaletteMode,
   }
 }
 
@@ -325,14 +342,53 @@ export const actions = {
       typeof appData.storageFolder === "string" ? appData.storageFolder : null
     const defaultEditor: DefaultEditor =
       appData.defaultEditor === "build" ? "build" : "code"
+    const confirmTrashMoves = appData.confirmTrashMoves !== false
+    const themeMode: ThemeMode =
+      appData.themeMode === "light" || appData.themeMode === "dark"
+        ? appData.themeMode
+        : "system"
+    const uiPaletteMode: UiPaletteMode =
+      appData.uiPaletteMode === "muted" ||
+      appData.uiPaletteMode === "high-contrast"
+        ? appData.uiPaletteMode
+        : "default"
+    const playerPaletteMode: PlayerPaletteMode =
+      appData.playerPaletteMode === "editor" ? "editor" : "default"
 
     setState("app", "folders", folders)
     setState("app", "storageMode", storageMode)
     setState("app", "storageFolder", storageFolder)
     setState("app", "defaultEditor", defaultEditor)
+    setState("app", "confirmTrashMoves", confirmTrashMoves)
+    setState("app", "themeMode", themeMode)
+    setState("app", "uiPaletteMode", uiPaletteMode)
+    setState("app", "playerPaletteMode", playerPaletteMode)
 
     let shouldPersist = appData.storageMode !== "local" && appData.storageMode !== "folder"
     if (appData.defaultEditor !== "code" && appData.defaultEditor !== "build") {
+      shouldPersist = true
+    }
+    if (typeof appData.confirmTrashMoves !== "boolean") {
+      shouldPersist = true
+    }
+    if (
+      appData.themeMode !== "system" &&
+      appData.themeMode !== "light" &&
+      appData.themeMode !== "dark"
+    ) {
+      shouldPersist = true
+    }
+    if (
+      appData.uiPaletteMode !== "default" &&
+      appData.uiPaletteMode !== "muted" &&
+      appData.uiPaletteMode !== "high-contrast"
+    ) {
+      shouldPersist = true
+    }
+    if (
+      appData.playerPaletteMode !== "default" &&
+      appData.playerPaletteMode !== "editor"
+    ) {
       shouldPersist = true
     }
 
@@ -383,6 +439,34 @@ export const actions = {
     if (state.app.defaultEditor === mode) return
 
     setState("app", "defaultEditor", mode)
+    await persistAppJson()
+  },
+
+  setConfirmTrashMoves: async (enabled: boolean) => {
+    if (state.app.confirmTrashMoves === enabled) return
+
+    setState("app", "confirmTrashMoves", enabled)
+    await persistAppJson()
+  },
+
+  setThemeMode: async (mode: ThemeMode) => {
+    if (state.app.themeMode === mode) return
+
+    setState("app", "themeMode", mode)
+    await persistAppJson()
+  },
+
+  setUiPaletteMode: async (mode: UiPaletteMode) => {
+    if (state.app.uiPaletteMode === mode) return
+
+    setState("app", "uiPaletteMode", mode)
+    await persistAppJson()
+  },
+
+  setPlayerPaletteMode: async (mode: PlayerPaletteMode) => {
+    if (state.app.playerPaletteMode === mode) return
+
+    setState("app", "playerPaletteMode", mode)
     await persistAppJson()
   },
 

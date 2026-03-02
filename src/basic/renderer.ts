@@ -1,10 +1,11 @@
 import { FontChip } from "./font-chip"
 import { stringToAsciiCode } from "./ascii"
+import type { PlayerPaletteMode } from "../lib/theme"
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value))
 
-const PALETTE = [
+const DEFAULT_PLAYER_PALETTE = [
   "#2D1B2E",
   "#218A91",
   "#3CC2FA",
@@ -23,6 +24,34 @@ const PALETTE = [
   "#F9F4EA",
 ]
 
+const EDITOR_PLAYER_PALETTE = [
+  "#0f172a",
+  "#2563eb",
+  "#38bdf8",
+  "#c4b5fd",
+  "#312e81",
+  "#334155",
+  "#64748b",
+  "#22c55e",
+  "#7f1d1d",
+  "#ef4444",
+  "#f472b6",
+  "#e5e7eb",
+  "#a16207",
+  "#f59e0b",
+  "#facc15",
+  "#ffffff",
+]
+
+const PLAYER_PALETTE_BY_MODE: Record<PlayerPaletteMode, readonly string[]> = {
+  default: DEFAULT_PLAYER_PALETTE,
+  editor: EDITOR_PLAYER_PALETTE,
+}
+
+export const getPlayerPaletteForMode = (
+  mode: PlayerPaletteMode = "default"
+): readonly string[] => PLAYER_PALETTE_BY_MODE[mode] ?? DEFAULT_PLAYER_PALETTE
+
 export class PixelTextRenderer {
   readonly width = 256
   readonly height = 240
@@ -34,6 +63,7 @@ export class PixelTextRenderer {
   private readonly ctx: CanvasRenderingContext2D
   private readonly font = new FontChip()
   private readonly tintedAtlases = new Map<number, HTMLCanvasElement>()
+  private palette: readonly string[]
   private cursorX = 0
   private cursorY = 0
   private pendingWrap = false
@@ -41,9 +71,13 @@ export class PixelTextRenderer {
   private bgColor = 0
   private readonly chars: string[][]
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    options: { paletteMode?: PlayerPaletteMode } = {}
+  ) {
     this.canvas.width = this.width
     this.canvas.height = this.height
+    this.palette = getPlayerPaletteForMode(options.paletteMode)
 
     const context = this.canvas.getContext("2d")
     if (!context) {
@@ -54,6 +88,11 @@ export class PixelTextRenderer {
     this.chars = Array.from({ length: this.rows }, () =>
       Array.from({ length: this.cols }, () => " ")
     )
+  }
+
+  setPaletteMode(mode: PlayerPaletteMode): void {
+    this.palette = getPlayerPaletteForMode(mode)
+    this.tintedAtlases.clear()
   }
 
   async init(fontUrl: string): Promise<void> {
@@ -283,12 +322,12 @@ export class PixelTextRenderer {
   }
 
   private normalizeColorIndex(value: number): number {
-    const size = PALETTE.length
+    const size = this.palette.length
     const normalized = Math.trunc(value) % size
     return normalized < 0 ? normalized + size : normalized
   }
 
   private resolveColor(value: number): string {
-    return PALETTE[this.normalizeColorIndex(value)]
+    return this.palette[this.normalizeColorIndex(value)]
   }
 }

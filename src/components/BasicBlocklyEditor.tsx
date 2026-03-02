@@ -18,6 +18,9 @@ import {
 
 Blockly.setLocale(En)
 
+const resolveBlocklyMediaPath = (): string =>
+  new URL("/blockly/media/", window.location.href).toString()
+
 export type BasicBlocklyPendingInsert = {
   id: number
   statement: string
@@ -50,7 +53,7 @@ export const BasicBlocklyEditor = (props: {
   let mutatingWorkspace = false
   let lastWorkspaceSource = ""
   let resizeObserver: ResizeObserver | null = null
-  let pendingResizeTimeoutId: number | null = null
+  const pendingResizeTimeoutIds: number[] = []
 
   const normalizeSource = (source: string): string =>
     emitBasicSourceFromVisualLines(parseBasicSourceToVisualLines(source))
@@ -119,6 +122,7 @@ export const BasicBlocklyEditor = (props: {
     ensureBasicBlocklyBlocks()
 
     workspace = Blockly.inject(hostEl, {
+      media: resolveBlocklyMediaPath(),
       trashcan: true,
       move: {
         drag: true,
@@ -158,18 +162,27 @@ export const BasicBlocklyEditor = (props: {
       }
     }
 
+    const clearPendingResizeTimeouts = () => {
+      while (pendingResizeTimeoutIds.length > 0) {
+        const timeoutId = pendingResizeTimeoutIds.pop()
+        if (timeoutId !== undefined) {
+          window.clearTimeout(timeoutId)
+        }
+      }
+    }
+
     const scheduleResizeWorkspace = () => {
       if (!workspace) return
       window.requestAnimationFrame(() => {
         resizeWorkspace()
       })
-      if (pendingResizeTimeoutId !== null) {
-        window.clearTimeout(pendingResizeTimeoutId)
+      clearPendingResizeTimeouts()
+      for (const delay of [0, 50, 150]) {
+        const timeoutId = window.setTimeout(() => {
+          resizeWorkspace()
+        }, delay)
+        pendingResizeTimeoutIds.push(timeoutId)
       }
-      pendingResizeTimeoutId = window.setTimeout(() => {
-        pendingResizeTimeoutId = null
-        resizeWorkspace()
-      }, 0)
     }
 
     workspace.addChangeListener(onWorkspaceChange)
@@ -186,10 +199,7 @@ export const BasicBlocklyEditor = (props: {
 
     onCleanup(() => {
       window.removeEventListener("resize", resizeWorkspace)
-      if (pendingResizeTimeoutId !== null) {
-        window.clearTimeout(pendingResizeTimeoutId)
-        pendingResizeTimeoutId = null
-      }
+      clearPendingResizeTimeouts()
       resizeObserver?.disconnect()
       resizeObserver = null
       workspace?.removeChangeListener(onWorkspaceChange)
@@ -214,13 +224,13 @@ export const BasicBlocklyEditor = (props: {
       () => props.isVisible,
       (isVisible) => {
         if (!isVisible || !workspace) return
-        queueMicrotask(() => {
+        const runResize = () => {
           if (!workspace) return
           Blockly.svgResize(workspace)
-          window.requestAnimationFrame(() => {
-            workspace && Blockly.svgResize(workspace)
-          })
-        })
+        }
+        queueMicrotask(runResize)
+        window.requestAnimationFrame(runResize)
+        window.setTimeout(runResize, 50)
       }
     )
   )
