@@ -223,9 +223,17 @@ export const Editor = (props: {
       if (!view) return
       const oldValue = view.state.doc.toString()
       if (props.value !== oldValue) {
+        const hadFocus = view.hasFocus
+        const selection = view.state.selection.main
+        const nextAnchor = Math.min(selection.anchor, props.value.length)
+        const nextHead = Math.min(selection.head, props.value.length)
         view.dispatch({
           changes: { from: 0, to: oldValue.length, insert: props.value },
+          selection: { anchor: nextAnchor, head: nextHead },
         })
+        if (hadFocus) {
+          view.focus()
+        }
       }
     })
   })

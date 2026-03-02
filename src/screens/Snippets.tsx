@@ -91,6 +91,7 @@ export const Snippets = () => {
   let suppressTrashButtonClick = false
   let dragPreviewEl: HTMLElement | null = null
   let typingIdleTimeoutId: number | null = null
+  let contentLoadRequestId = 0
 
   const getSnippetSortDateSource = (snippet: (typeof state.snippets)[number]) => {
     return (
@@ -938,12 +939,19 @@ export const Snippets = () => {
   const loadContent = async () => {
     if (!searchParams.id) return
 
-    if (getIsContentDirty() || getIsSavingContent()) return
+    if (getIsContentDirty() || getIsSavingContent() || getIsEditorTyping()) return
 
     const targetId = searchParams.id
-    const content = await actions.readSnippetContent(targetId)
+    const revisionAtStart = latestContentRevision
+    const requestId = ++contentLoadRequestId
+    const nextContent = await actions.readSnippetContent(targetId)
+    if (requestId !== contentLoadRequestId) return
     if (searchParams.id !== targetId) return
-    setContent(content)
+    if (revisionAtStart !== latestContentRevision) return
+    if (getIsContentDirty() || getIsSavingContent() || getIsEditorTyping()) return
+    if (nextContent !== content()) {
+      setContent(nextContent)
+    }
   }
 
   // load snippet content
@@ -951,14 +959,15 @@ export const Snippets = () => {
     on(
       () => [searchParams.id],
       () => {
+        contentLoadRequestId += 1
         latestContentRevision = 0
         setIsContentDirty(false)
         setIsSavingContent(false)
-        loadContent()
+        void loadContent()
 
         // reload snippet content every 2 seconds
-        const watchFile = window.setInterval(async () => {
-          loadContent()
+        const watchFile = window.setInterval(() => {
+          void loadContent()
         }, 2000)
 
         onCleanup(() => {
