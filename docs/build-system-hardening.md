@@ -9,7 +9,7 @@ The goal of this redesign was:
 1. One build path for local and CI.
 2. Predictable per-platform outputs.
 3. A CI workflow that sets up environment, runs local scripts, and publishes artifacts.
-4. Better failure behavior: release publication should still happen with partial artifacts when possible.
+4. Certified release safety: publish only when signing, notarization, and updater validation pass end-to-end.
 
 ## High-Level Architecture
 
@@ -25,9 +25,17 @@ Core files:
 
 1. `scripts/build-release-artifacts.cjs`
 2. `scripts/sync-version-from-tag.cjs`
-3. `.github/workflows/tag-release-builds.yml`
-4. `scripts/check-tag-release-workflow.cjs`
-5. `package.json`
+3. `scripts/release-next-tag.cjs`
+4. `scripts/generate-updater-manifest.cjs`
+5. `scripts/check-release-artifacts.cjs`
+6. `scripts/validate-updater-manifest.cjs`
+7. `scripts/update-gateway-server.cjs`
+8. `scripts/fetch-signing-secrets-from-azure.cjs`
+9. `scripts/macos-notarize-and-verify.cjs`
+10. `scripts/windows-verify-signatures.ps1`
+11. `.github/workflows/tag-release-builds.yml`
+12. `scripts/check-tag-release-workflow.cjs`
+13. `package.json`
 
 ## Local Build Commands
 
@@ -97,28 +105,55 @@ Expected output pattern:
 
 ## GitHub Actions Workflow Design
 
-The release workflow now has three clear phases:
+The release workflow now has four clear phases:
 
 ### Preflight phase
 
-1. Validate tag format (`v<major>.<minor>.<patch>`).
+1. Validate tag format (`v<major>.<minor>[.<patch>]` and `v<major>.<minor>.<patch>-dev.<n>`).
+   - `v<major>.<minor>` is normalized to `<major>.<minor>.0` for app semver fields.
 2. Ensure tag commit is on `main`.
 3. Sync `package.json` and `src-tauri/tauri.conf.json` versions from the tag.
-4. Run workflow invariant checks.
+4. Login to Azure via OIDC.
+5. Validate Azure Key Vault retrieval path for updater signing secret.
+6. Run workflow invariant checks.
 
 ### Build phase (matrix by OS)
 
 1. Sync `package.json` and `src-tauri/tauri.conf.json` versions from the tag.
-2. Setup `pnpm`, Node, Rust, and Linux system deps.
-3. Run `pnpm build:release -- --platform <os>`.
-4. Upload `release-files/*` as artifacts.
+2. Login to Azure via OIDC and fetch signing/notarization secrets from Key Vault.
+3. Setup `pnpm`, Node, Rust, and Linux system deps.
+4. Run `pnpm build:release -- --platform <os>`.
+5. macOS leg imports Developer ID cert, notarizes/staples DMG, and verifies (`codesign`, `spctl`, `stapler`).
+6. Windows leg signs `.exe`/`.msi` with Azure Trusted Signing and verifies Authenticode status.
+7. Verify expected installer, updater, and OS-signing report artifacts for that platform.
+8. Upload `release-files/*` as artifacts.
 
 ### Release phase
 
-1. Runs with `if: always() && needs.preflight.result == 'success'`.
-2. Downloads all available artifacts.
-3. Publishes/updates GitHub Release for the tag.
-4. Uses `fail_on_unmatched_files: false` so partial artifact sets still publish.
+1. Runs only when preflight and full build matrix succeed.
+2. Downloads all artifacts.
+3. Generates channel manifest from signed updater artifacts (required):
+   - `stable-latest.json` for stable tags
+   - `dev-latest.json` for dev tags
+4. Validates generated manifest schema.
+5. Stable tags also publish `latest.json` compatibility alias.
+6. Publishes/updates GitHub Release for the tag.
+
+### Smoke phase
+
+1. Verify published manifest URLs are reachable.
+2. Verify macOS and Windows signing report assets are reachable.
+3. Validate signing report JSON contents for pass/fail state.
+
+### Updater artifact path
+
+1. Build script now supports `ENABLE_UPDATER_ARTIFACTS=1`.
+2. When enabled, Tauri updater bundles are copied into `release-files/` as:
+   - `GameNotebook_<version>_updater_darwin-<arch>.tar.gz` (+ `.sig`)
+   - `GameNotebook_<version>_updater_windows-<arch>.zip` (+ `.sig`)
+   - `GameNotebook_<version>_updater_linux-<arch>.tar.gz` (+ `.sig`)
+3. Release job runs `scripts/generate-updater-manifest.cjs` to create channel manifest assets.
+4. Desktop app updater calls gateway endpoint `/updater`, which resolves `stable` vs `dev` channel and returns dynamic updater JSON.
 
 ## Problems We Hit and How We Fixed Them
 
@@ -216,9 +251,10 @@ Fix:
 `scripts/check-tag-release-workflow.cjs` enforces invariants so workflow and local commands do not drift:
 
 1. Tag trigger format and preflight checks.
-2. Build job calling local release command.
-3. Release job partial-publish behavior.
-4. Required `package.json` script wiring.
+2. Azure OIDC and Key Vault secret retrieval.
+3. Build job signing/notarization requirements and local release command usage.
+4. Release + smoke signing/report checks.
+5. Required `package.json` script wiring.
 
 This check runs both locally and in CI guardrail workflow.
 
@@ -230,6 +266,6 @@ The hardened system now provides:
 2. Reliable debug path (`pnpm dev:live`).
 3. Deterministic release artifact naming.
 4. Better cross-platform resilience.
-5. A release step that publishes available artifacts even when one platform build fails.
+5. A fail-closed release path that blocks publish on signing/notarization/manifest failures.
 
 The net result is a build process that is easier to test locally, easier to reason about in CI, and less fragile under real-world runner constraints.

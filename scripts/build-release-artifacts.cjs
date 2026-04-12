@@ -15,6 +15,12 @@ const BUNDLES_BY_PLATFORM = {
   linux: "appimage,deb",
 }
 
+const UPDATER_TARGET_PREFIX_BY_PLATFORM = {
+  macos: "darwin",
+  windows: "windows",
+  linux: "linux",
+}
+
 function usage() {
   console.log(`Usage:
   node scripts/build-release-artifacts.cjs [--platform <macos|windows|linux>] [--skip-build]
@@ -171,10 +177,18 @@ function parseArgs(argv) {
   return options
 }
 
-function createCiConfig(baseConfigPath, releaseConfigPath) {
+function createCiConfig(baseConfigPath, releaseConfigPath, options = {}) {
+  const enableUpdaterArtifacts = options.enableUpdaterArtifacts === true
   const baseConfig = JSON.parse(fs.readFileSync(baseConfigPath, "utf8"))
-  if (baseConfig?.tauri?.updater) {
+  if (baseConfig?.tauri?.updater && !enableUpdaterArtifacts) {
     baseConfig.tauri.updater.active = false
+  }
+  if (
+    options.platform === "macos" &&
+    options.appleSigningIdentity &&
+    baseConfig?.tauri?.bundle?.macOS
+  ) {
+    baseConfig.tauri.bundle.macOS.signingIdentity = options.appleSigningIdentity
   }
   if (baseConfig?.build) {
     // Avoid network-dependent npx bootstrap during release packaging.
@@ -198,7 +212,6 @@ function collectMacArtifacts({ bundleRoot, releaseFilesDir, artifactPrefix, prod
   }
 
   const appPath = path.join(macBundleDir, appDir.name)
-  run("codesign", ["--force", "--deep", "--sign", "-", appPath])
 
   const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), "gamenotebook-dmg-"))
   const stagedApp = path.join(stageDir, appDir.name)
@@ -353,6 +366,97 @@ function collectLinuxArtifacts({ bundleRoot, releaseFilesDir, artifactPrefix }) 
   return outputs
 }
 
+function normalizeUpdaterArch(value) {
+  if (!value) return null
+  const normalized = String(value).toLowerCase()
+  if (["x86_64", "x64", "amd64"].includes(normalized)) return "x86_64"
+  if (["aarch64", "arm64"].includes(normalized)) return "aarch64"
+  if (["i686", "x86", "ia32"].includes(normalized)) return "i686"
+  if (["armv7", "armv7l"].includes(normalized)) return "armv7"
+  return null
+}
+
+function inferUpdaterArch(fileName, fallbackArch) {
+  const lowerName = fileName.toLowerCase()
+  if (lowerName.includes("aarch64") || lowerName.includes("arm64")) return "aarch64"
+  if (lowerName.includes("x86_64") || lowerName.includes("x64") || lowerName.includes("amd64")) {
+    return "x86_64"
+  }
+  if (lowerName.includes("i686") || lowerName.includes("ia32")) return "i686"
+  if (lowerName.includes("armv7")) return "armv7"
+  return normalizeUpdaterArch(fallbackArch) || "x86_64"
+}
+
+function isUpdaterArchiveForPlatform(filePath, platform) {
+  const lowerPath = filePath.toLowerCase()
+  if (platform === "macos") {
+    return (
+      lowerPath.includes(`${path.sep}macos${path.sep}`) &&
+      lowerPath.endsWith(".app.tar.gz")
+    )
+  }
+  if (platform === "windows") {
+    return lowerPath.includes(`${path.sep}msi${path.sep}`) && lowerPath.endsWith(".msi.zip")
+  }
+  return (
+    lowerPath.includes(`${path.sep}appimage${path.sep}`) &&
+    lowerPath.endsWith(".appimage.tar.gz")
+  )
+}
+
+function updaterArchiveExtension(platform) {
+  return platform === "windows" ? ".zip" : ".tar.gz"
+}
+
+function collectUpdaterArtifacts({
+  platform,
+  bundleRoot,
+  releaseFilesDir,
+  artifactPrefix,
+  fallbackArch,
+}) {
+  const discoveredFiles = walkFiles(bundleRoot).sort((a, b) => a.localeCompare(b))
+  const archives = discoveredFiles.filter((filePath) =>
+    isUpdaterArchiveForPlatform(filePath, platform)
+  )
+
+  if (archives.length === 0) {
+    throw new Error(
+      `Updater artifacts are enabled, but no updater archive was found for ${platform} under ${bundleRoot}.`
+    )
+  }
+
+  const outputs = []
+  const seenTargets = new Set()
+  const targetPrefix = UPDATER_TARGET_PREFIX_BY_PLATFORM[platform]
+
+  for (const archivePath of archives) {
+    const signaturePath = `${archivePath}.sig`
+    if (!fs.existsSync(signaturePath)) {
+      throw new Error(`Missing updater signature file for ${archivePath}`)
+    }
+
+    const archiveName = path.basename(archivePath)
+    const arch = inferUpdaterArch(archiveName, fallbackArch)
+    const target = `${targetPrefix}-${arch}`
+    if (seenTargets.has(target)) {
+      continue
+    }
+    seenTargets.add(target)
+
+    const destinationArchivePath = path.join(
+      releaseFilesDir,
+      `${artifactPrefix}_updater_${target}${updaterArchiveExtension(platform)}`
+    )
+    const destinationSignaturePath = `${destinationArchivePath}.sig`
+
+    outputs.push(copyArtifact(archivePath, destinationArchivePath))
+    outputs.push(copyArtifact(signaturePath, destinationSignaturePath))
+  }
+
+  return outputs
+}
+
 function main() {
   const options = parseArgs(process.argv.slice(2))
   const hostPlatform = detectPlatform()
@@ -377,6 +481,9 @@ function main() {
   const rawReleaseVersion = process.env.RELEASE_VERSION || `v${packageVersion}`
   const releaseVersion = sanitizeFileComponent(rawReleaseVersion)
   const artifactPrefix = `${sanitizeFileComponent(productName)}_${releaseVersion}`
+  const enableUpdaterArtifacts = process.env.ENABLE_UPDATER_ARTIFACTS === "1"
+  const releaseChannel = process.env.RELEASE_CHANNEL || "stable"
+  const appleSigningIdentity = process.env.APPLE_SIGNING_IDENTITY || null
 
   if (options.platform !== hostPlatform && process.env.ALLOW_CROSS_PLATFORM !== "1") {
     throw new Error(
@@ -389,13 +496,27 @@ function main() {
   console.log(`Release version: ${releaseVersion}`)
   console.log(`CARGO_TARGET_DIR: ${cargoTargetDir}`)
   console.log(`CLANG_MODULE_CACHE_PATH: ${clangModuleCachePath}`)
+  console.log(`Updater artifacts enabled: ${enableUpdaterArtifacts ? "yes" : "no"}`)
+  console.log(`Release channel: ${releaseChannel}`)
+
+  if (options.platform === "macos" && releaseChannel === "stable") {
+    if (!appleSigningIdentity) {
+      throw new Error(
+        "Stable macOS releases require APPLE_SIGNING_IDENTITY to be set for Developer ID signing."
+      )
+    }
+  }
 
   fs.rmSync(releaseFilesDir, { recursive: true, force: true })
   fs.mkdirSync(releaseFilesDir, { recursive: true })
   fs.mkdirSync(clangModuleCachePath, { recursive: true })
   const tauriMutableFileSnapshots = snapshotFiles([cargoTomlPath, cargoLockPath])
 
-  createCiConfig(tauriConfigPath, ciConfigPath)
+  createCiConfig(tauriConfigPath, ciConfigPath, {
+    enableUpdaterArtifacts,
+    platform: options.platform,
+    appleSigningIdentity,
+  })
 
   try {
     if (!options.skipBuild) {
@@ -432,6 +553,17 @@ function main() {
       })
     } else {
       outputs = collectLinuxArtifacts({ bundleRoot, releaseFilesDir, artifactPrefix })
+    }
+
+    if (enableUpdaterArtifacts) {
+      const updaterOutputs = collectUpdaterArtifacts({
+        platform: options.platform,
+        bundleRoot,
+        releaseFilesDir,
+        artifactPrefix,
+        fallbackArch: process.arch,
+      })
+      outputs = [...outputs, ...updaterOutputs]
     }
 
     console.log("")

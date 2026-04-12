@@ -19,7 +19,9 @@ function parseArgs(argv) {
       continue
     }
     if (arg === "--help" || arg === "-h") {
-      console.log("Usage: node scripts/sync-version-from-tag.cjs --tag v<major>.<minor>.<patch>")
+      console.log(
+        "Usage: node scripts/sync-version-from-tag.cjs --tag v<major>.<minor>[.<patch>][-dev.<n>]"
+      )
       process.exit(0)
     }
     throw new Error(`Unknown argument: ${arg}`)
@@ -30,10 +32,16 @@ function parseArgs(argv) {
 function extractVersion(tagValue) {
   const raw = String(tagValue || "").trim()
   const normalized = raw.startsWith("v") ? raw.slice(1) : raw
-  if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(normalized)) {
+  if (!/^[0-9]+\.[0-9]+(\.[0-9]+)?(-dev\.[0-9]+)?$/.test(normalized)) {
     throw new Error(
-      `Invalid tag/version '${raw}'. Expected v<major>.<minor>.<patch> or <major>.<minor>.<patch>.`
+      `Invalid tag/version '${raw}'. Expected v<major>.<minor>[.<patch>][-dev.<n>] or <major>.<minor>[.<patch>][-dev.<n>].`
     )
+  }
+  const [versionPart, prereleasePart] = normalized.split("-")
+  const versionParts = versionPart.split(".")
+  if (versionParts.length === 2) {
+    const semver = `${versionParts[0]}.${versionParts[1]}.0`
+    return prereleasePart ? `${semver}-${prereleasePart}` : semver
   }
   return normalized
 }

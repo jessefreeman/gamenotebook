@@ -1,4 +1,5 @@
 import { dialog } from "@tauri-apps/api"
+import { open } from "@tauri-apps/api/shell"
 import { createSignal, For, Show } from "solid-js"
 import { actions, state, type DefaultEditor } from "../store"
 import {
@@ -14,6 +15,20 @@ export const SettingsPanel = () => {
   const [getRunnerMode, setRunnerMode] = createSignal<"same" | "separate">(
     "same"
   )
+  const getUpdaterStatusLabel = () => {
+    if (state.updater.status === "checking") return "Checking for updates..."
+    if (state.updater.status === "available") return "Update available"
+    if (state.updater.status === "downloading") return "Downloading update..."
+    if (state.updater.status === "installing") return "Installing update..."
+    if (state.updater.status === "updated") return "Update installed"
+    if (state.updater.status === "up-to-date") return "App is up to date"
+    if (state.updater.status === "error") return "Update error"
+    return "Idle"
+  }
+  const isUpdateBusy = () =>
+    state.updater.status === "checking" ||
+    state.updater.status === "downloading" ||
+    state.updater.status === "installing"
 
   const setStorageMode = async (mode: "local" | "folder") => {
     await actions.setStorageMode(mode)
@@ -46,6 +61,20 @@ export const SettingsPanel = () => {
 
   const setPlayerPaletteMode = async (mode: PlayerPaletteMode) => {
     await actions.setPlayerPaletteMode(mode)
+  }
+
+  const checkForUpdates = async () => {
+    await actions.checkForUpdates()
+  }
+
+  const installUpdateAndRelaunch = async () => {
+    await actions.installUpdateAndRelaunch()
+  }
+
+  const openManualDownload = async () => {
+    const url = state.updater.manualDownloadUrl
+    if (!url) return
+    await open(url)
   }
 
   return (
@@ -236,6 +265,107 @@ export const SettingsPanel = () => {
             />
             <span>Open in a separate window</span>
           </label>
+        </section>
+        <div class="px-2">
+          <div class="border-t border-zinc-200 dark:border-zinc-700"></div>
+        </div>
+        <section class="space-y-3 px-2 py-4">
+          <h2 class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-300">
+            Updates
+          </h2>
+          <Show
+            when={state.updater.supported}
+            fallback={
+              <p class="text-xs text-zinc-500 dark:text-zinc-300">
+                Update checks are only available in the desktop app shell.
+              </p>
+            }
+          >
+            <div class="space-y-2">
+              <div class="flex items-center justify-between gap-3">
+                <span>Update Channel</span>
+                <select
+                  class="h-8 min-w-[11rem] rounded-lg border bg-transparent px-2 text-xs"
+                  value={state.app.updateChannel}
+                  onChange={(event) =>
+                    void actions.setUpdateChannel(
+                      event.currentTarget.value as "stable" | "dev"
+                    )
+                  }
+                >
+                  <option value="stable">Stable</option>
+                  <option value="dev">Dev</option>
+                </select>
+              </div>
+              <Show when={state.app.updateChannel === "dev"}>
+                <p class="text-xs text-amber-700 dark:text-amber-300">
+                  Dev channel can include unfinished changes and should be used for testing.
+                </p>
+              </Show>
+              <div class="text-xs text-zinc-500 dark:text-zinc-300">
+                Current version: {state.updater.currentVersion || "unknown"}
+              </div>
+              <div class="text-xs text-zinc-500 dark:text-zinc-300">
+                Status: {getUpdaterStatusLabel()}
+              </div>
+              <Show when={state.updater.lastCheckedAt}>
+                <div class="text-xs text-zinc-500 dark:text-zinc-300">
+                  Last checked:{" "}
+                  {new Date(state.updater.lastCheckedAt!).toLocaleString()}
+                </div>
+              </Show>
+              <Show when={state.updater.availableVersion}>
+                <div class="text-xs text-emerald-700 dark:text-emerald-300">
+                  New version: {state.updater.availableVersion}
+                </div>
+              </Show>
+              <Show when={state.updater.availableDate}>
+                <div class="text-xs text-zinc-500 dark:text-zinc-300">
+                  Published:{" "}
+                  {new Date(state.updater.availableDate!).toLocaleString()}
+                </div>
+              </Show>
+              <Show when={state.updater.notes}>
+                <div class="rounded-lg border border-zinc-200 p-2 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">
+                  {state.updater.notes}
+                </div>
+              </Show>
+              <div class="flex flex-wrap items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  class="h-7 rounded-lg border px-2 text-xs hover:bg-zinc-100 disabled:opacity-50 disabled:hover:bg-transparent dark:hover:bg-zinc-600"
+                  onClick={() => void checkForUpdates()}
+                  disabled={isUpdateBusy()}
+                >
+                  Check for Updates
+                </button>
+                <Show when={state.updater.availableVersion}>
+                  <button
+                    type="button"
+                    class="h-7 rounded-lg border px-2 text-xs hover:bg-zinc-100 disabled:opacity-50 disabled:hover:bg-transparent dark:hover:bg-zinc-600"
+                    onClick={() => void installUpdateAndRelaunch()}
+                    disabled={isUpdateBusy()}
+                  >
+                    Install Update
+                  </button>
+                </Show>
+                <Show when={state.updater.manualDownloadUrl}>
+                  <button
+                    type="button"
+                    class="h-7 rounded-lg border px-2 text-xs hover:bg-zinc-100 disabled:opacity-50 disabled:hover:bg-transparent dark:hover:bg-zinc-600"
+                    onClick={() => void openManualDownload()}
+                  >
+                    Manual Download
+                  </button>
+                </Show>
+              </div>
+              <Show when={state.updater.error}>
+                <p class="text-xs text-red-600 dark:text-red-300">
+                  {state.updater.error}
+                </p>
+              </Show>
+            </div>
+          </Show>
         </section>
       </div>
     </div>

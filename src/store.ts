@@ -3,6 +3,14 @@ import { dialog, fs, path } from "@tauri-apps/api"
 import { BaseDirectory } from "@tauri-apps/api/fs"
 import { createStore } from "solid-js/store"
 import {
+  checkForShellUpdate,
+  getCurrentShellVersion,
+  installShellUpdate,
+  isShellUpdaterSupported,
+  type UpdateChannel,
+  relaunchShellApp,
+} from "./lib/shell-updater"
+import {
   type PlayerPaletteMode,
   type ThemeMode,
   type UiPaletteMode,
@@ -19,6 +27,15 @@ export interface Snippet {
 
 export type StorageMode = "local" | "folder"
 export type DefaultEditor = "code" | "build"
+export type UpdaterStatus =
+  | "idle"
+  | "checking"
+  | "up-to-date"
+  | "available"
+  | "downloading"
+  | "installing"
+  | "updated"
+  | "error"
 
 interface AppData {
   folders: string[]
@@ -29,10 +46,23 @@ interface AppData {
   themeMode: ThemeMode
   uiPaletteMode: UiPaletteMode
   playerPaletteMode: PlayerPaletteMode
+  updateChannel: UpdateChannel
 }
 
 interface SnippetIndexData {
   folders: Record<string, Snippet[]>
+}
+
+interface UpdaterData {
+  supported: boolean
+  status: UpdaterStatus
+  currentVersion: string | null
+  availableVersion: string | null
+  availableDate: string | null
+  notes: string | null
+  lastCheckedAt: string | null
+  manualDownloadUrl: string | null
+  error: string | null
 }
 
 const SNIPPET_INDEX_FILENAME = "snippet-index.json"
@@ -50,6 +80,7 @@ const [state, setState] = createStore<{
   app: AppData
   snippets: Snippet[]
   isMac: boolean
+  updater: UpdaterData
 }>({
   ready: false,
   app: {
@@ -61,9 +92,21 @@ const [state, setState] = createStore<{
     themeMode: "system",
     uiPaletteMode: "default",
     playerPaletteMode: "default",
+    updateChannel: "stable",
   },
   snippets: [],
   isMac: /macintosh/i.test(navigator.userAgent),
+  updater: {
+    supported: isShellUpdaterSupported(),
+    status: "idle",
+    currentVersion: null,
+    availableVersion: null,
+    availableDate: null,
+    notes: null,
+    lastCheckedAt: null,
+    manualDownloadUrl: null,
+    error: null,
+  },
 })
 
 export { state }
@@ -87,6 +130,7 @@ const getAppDataSnapshot = (): AppData => {
     themeMode: state.app.themeMode,
     uiPaletteMode: state.app.uiPaletteMode,
     playerPaletteMode: state.app.playerPaletteMode,
+    updateChannel: state.app.updateChannel,
   }
 }
 
@@ -316,6 +360,12 @@ const isSameStringArray = (left: string[], right: string[]) => {
   return left.every((value, index) => value === right[index])
 }
 
+const toErrorMessage = (error: unknown) => {
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error === "string" && error.trim()) return error
+  return "Unknown updater error"
+}
+
 const withFolderFirst = (folder: string) => {
   if (state.app.folders.includes(folder)) {
     return [folder, ...state.app.folders.filter((item) => item !== folder)]
@@ -354,6 +404,8 @@ export const actions = {
         : "default"
     const playerPaletteMode: PlayerPaletteMode =
       appData.playerPaletteMode === "editor" ? "editor" : "default"
+    const updateChannel: UpdateChannel =
+      appData.updateChannel === "dev" ? "dev" : "stable"
 
     setState("app", "folders", folders)
     setState("app", "storageMode", storageMode)
@@ -363,6 +415,7 @@ export const actions = {
     setState("app", "themeMode", themeMode)
     setState("app", "uiPaletteMode", uiPaletteMode)
     setState("app", "playerPaletteMode", playerPaletteMode)
+    setState("app", "updateChannel", updateChannel)
 
     let shouldPersist = appData.storageMode !== "local" && appData.storageMode !== "folder"
     if (appData.defaultEditor !== "code" && appData.defaultEditor !== "build") {
@@ -391,6 +444,9 @@ export const actions = {
     ) {
       shouldPersist = true
     }
+    if (appData.updateChannel !== "stable" && appData.updateChannel !== "dev") {
+      shouldPersist = true
+    }
 
     if (storageMode === "folder") {
       if (!storageFolder) {
@@ -417,6 +473,93 @@ export const actions = {
 
     await actions.loadActiveStorage()
     setState("ready", true)
+  },
+
+  initUpdater: async () => {
+    const supported = isShellUpdaterSupported()
+    setState("updater", "supported", supported)
+    if (!supported) return
+
+    const currentVersion = await getCurrentShellVersion().catch((error) => {
+      console.error(error)
+      return null
+    })
+
+    if (currentVersion) {
+      setState("updater", "currentVersion", currentVersion)
+    }
+
+    await actions.checkForUpdates()
+  },
+
+  checkForUpdates: async () => {
+    if (!state.updater.supported) return false
+    if (state.updater.status === "checking") {
+      return Boolean(state.updater.availableVersion)
+    }
+
+    setState("updater", "status", "checking")
+    setState("updater", "error", null)
+
+    try {
+      const currentVersion = await getCurrentShellVersion().catch(() => null)
+      if (currentVersion) {
+        setState("updater", "currentVersion", currentVersion)
+      }
+
+      const update = await checkForShellUpdate(state.app.updateChannel)
+      setState("updater", "lastCheckedAt", new Date().toISOString())
+      setState("updater", "currentVersion", update.currentVersion)
+
+      if (update.shouldUpdate) {
+        setState("updater", "status", "available")
+        setState("updater", "availableVersion", update.manifest?.version || null)
+        setState("updater", "availableDate", update.manifest?.date || null)
+        setState("updater", "notes", update.manifest?.body || null)
+        setState(
+          "updater",
+          "manualDownloadUrl",
+          update.manifest?.manualDownloadUrl || null
+        )
+        return true
+      }
+
+      setState("updater", "status", "up-to-date")
+      setState("updater", "availableVersion", null)
+      setState("updater", "availableDate", null)
+      setState("updater", "notes", null)
+      setState("updater", "manualDownloadUrl", null)
+      return false
+    } catch (error) {
+      console.error(error)
+      setState("updater", "status", "error")
+      setState("updater", "error", toErrorMessage(error))
+      return false
+    }
+  },
+
+  installUpdateAndRelaunch: async () => {
+    if (!state.updater.supported) return
+    if (state.updater.status === "checking") return
+
+    if (!state.updater.availableVersion) {
+      const hasUpdate = await actions.checkForUpdates()
+      if (!hasUpdate) return
+    }
+
+    setState("updater", "status", "installing")
+    setState("updater", "error", null)
+
+    try {
+      setState("updater", "status", "downloading")
+      await installShellUpdate(state.app.updateChannel)
+      setState("updater", "status", "updated")
+      await relaunchShellApp()
+    } catch (error) {
+      console.error(error)
+      setState("updater", "status", "error")
+      setState("updater", "error", toErrorMessage(error))
+    }
   },
 
   removeFolderFromHistory: async (folder: string) => {
@@ -468,6 +611,14 @@ export const actions = {
 
     setState("app", "playerPaletteMode", mode)
     await persistAppJson()
+  },
+
+  setUpdateChannel: async (channel: UpdateChannel) => {
+    if (state.app.updateChannel === channel) return
+
+    setState("app", "updateChannel", channel)
+    await persistAppJson()
+    await actions.checkForUpdates()
   },
 
   loadActiveStorage: async () => {

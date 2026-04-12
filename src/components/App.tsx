@@ -24,7 +24,11 @@ export const App = () => {
       invoke("show_main_window")
     }
 
-    void actions.init()
+    void actions.init().then(() => {
+      if (!isRunnerWindow) {
+        void actions.initUpdater()
+      }
+    })
 
     onCleanup(() => {
       mql.removeEventListener("change", syncDarkMode)

@@ -4,18 +4,42 @@ on:
   pull_request:
     paths:
       - ".github/workflows/tag-release-builds.yml"
+      - ".github/workflows/promote-dev-to-stable.yml"
       - "scripts/check-tag-release-workflow.cjs"
       - "scripts/build-release-artifacts.cjs"
       - "scripts/sync-version-from-tag.cjs"
+      - "scripts/release-next-tag.cjs"
+      - "scripts/generate-updater-manifest.cjs"
+      - "scripts/promote-dev-to-stable.cjs"
+      - "scripts/validate-updater-manifest.cjs"
+      - "scripts/check-release-artifacts.cjs"
+      - "scripts/check-certified-release-readiness.cjs"
+      - "scripts/set-certified-release-github-vars.sh"
+      - "scripts/fetch-signing-secrets-from-azure.cjs"
+      - "scripts/macos-notarize-and-verify.cjs"
+      - "scripts/update-gateway-server.cjs"
+      - "scripts/windows-verify-signatures.ps1"
       - "package.json"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/tag-release-builds.yml"
+      - ".github/workflows/promote-dev-to-stable.yml"
       - "scripts/check-tag-release-workflow.cjs"
       - "scripts/build-release-artifacts.cjs"
       - "scripts/sync-version-from-tag.cjs"
+      - "scripts/release-next-tag.cjs"
+      - "scripts/generate-updater-manifest.cjs"
+      - "scripts/promote-dev-to-stable.cjs"
+      - "scripts/validate-updater-manifest.cjs"
+      - "scripts/check-release-artifacts.cjs"
+      - "scripts/check-certified-release-readiness.cjs"
+      - "scripts/set-certified-release-github-vars.sh"
+      - "scripts/fetch-signing-secrets-from-azure.cjs"
+      - "scripts/macos-notarize-and-verify.cjs"
+      - "scripts/update-gateway-server.cjs"
+      - "scripts/windows-verify-signatures.ps1"
       - "package.json"
 
 permissions:

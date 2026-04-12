@@ -1,0 +1,40 @@
+name: Promote Dev Tag To Stable
+
+on:
+  workflow_dispatch:
+    inputs:
+      dev_tag:
+        description: "Source dev tag (for example v1.4.0-dev.2)"
+        required: true
+        type: string
+      stable_tag:
+        description: "Optional stable tag override (for example v1.4.0)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    name: Promote dev tag to stable tag
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Promote tag
+        run: |
+          if [ -n "${{ inputs.stable_tag }}" ]; then
+            node scripts/promote-dev-to-stable.cjs --dev-tag "${{ inputs.dev_tag }}" --stable-tag "${{ inputs.stable_tag }}" --push
+          else
+            node scripts/promote-dev-to-stable.cjs --dev-tag "${{ inputs.dev_tag }}" --push
+          fi
